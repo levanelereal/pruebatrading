@@ -1,0 +1,59 @@
+TRAZADOR Y MEDIDOR DE LINEAS
+============================
+
+Que es
+------
+Una pagina suelta para medir lineas sobre un grafico. Se carga el CSV
+exportado de TradingView, se dibujan las lineas con el mouse, y la pagina
+calcula con que parametros se construye cada una: cuantil, contactos,
+violaciones y pendiente.
+
+Todo corre en el navegador. No manda datos a ningun lado ni guarda nada.
+
+
+Como publicarla
+---------------
+1. Subir estos archivos a un repositorio de GitHub.
+2. Conectarlo a Vercel (o dejar que el despliegue automatico lo tome).
+3. Listo: queda una direccion publica.
+
+El robots.txt y el vercel.json le dicen a los buscadores que no la indexen,
+asi que no va a aparecer en Google. Sigue siendo accesible para quien tenga
+el enlace.
+
+
+Como usarla
+-----------
+1. "Elegir CSV" y se carga el archivo de TradingView.
+   Arriba aparece el activo, la temporalidad y el rango de fechas.
+
+2. "Trazar" y dos clics sobre el grafico dibujan una linea.
+   Cada clic se pega al valor mas cercano de la vela: maximo, minimo,
+   apertura, cierre o borde del cuerpo. Abajo dice a cual se pego.
+
+3. Los extremos se arrastran para ajustar. La medicion se rehace sola.
+
+4. Rueda del mouse para acercar, arrastre en el fondo para mover.
+
+5. "Linea calculada" tiene deslizadores de cuantil y ventana. La linea
+   amarilla punteada se redibuja en vivo al moverlos.
+
+6. "Lineas del indicador" acepta el texto del panel de TradingView pegado
+   tal cual, con sus puntos y flechas. Ejemplo:
+
+      Morada unilateral   2025-10-29 · 756.29
+      Morada hoy / pend   681.29 · -0.3989
+      Menor azul          2026-05-12 · 594.04 -> 594.04
+
+   Esas lineas se dibujan con guion largo y tambien se pueden arrastrar.
+
+7. "Preparar para copiar" arma un resumen de todo lo medido.
+
+
+Que significa el cuantil
+------------------------
+Es a que altura se apoya la linea sobre la zona cuerpo-mecha de las velas.
+Cerca de 0 se pega a los minimos; 50 pasa por el medio.
+
+Medido sobre las lineas reales de Finviz: los soportes dan cerca de 8 %
+y las resistencias cerca de 97 %.
