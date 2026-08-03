@@ -85,6 +85,7 @@ summary{cursor:pointer;font-size:10px;color:var(--gris);margin-top:8px}
   <div class="caja" style="margin-top:12px">
    <canvas id="lz" height="470"></canvas>
    <div class="btns">
+    <button id="autoFinviz" style="background:var(--morada);color:#0d1117;font-weight:600;border-color:var(--morada);">Auto-Trazar Finviz</button>
     <button id="modo">Trazar</button>
     <select id="tipo"><option value="mayor">Mayor</option><option value="menor">Menor</option></select>
     <select id="rol"><option value="auto">Rol auto</option><option value="soporte">Soporte</option><option value="resistencia">Resistencia</option></select>
@@ -168,8 +169,6 @@ function procesar(txt){
  }
  if(V.length<20){$('info').innerHTML=`Solo leí <b>${V.length}</b> velas.`;return;}
  L=[];pend=null;sel=-1;
- // ═══ lineas del indicador, si el CSV las trae ═══
- // Estructura Mayor y Estructura Menor publican sus coordenadas como columnas.
  const ult=f[f.length-1].split(sep).map(limpiar);
  const col=n=>{const i=h.findIndex(x=>x===n); return i>=0?parseFloat(ult[i]):NaN;};
  let cargadas=0;
@@ -195,7 +194,6 @@ function procesar(txt){
 }
 let TICKER='', TF='';
 function detectarNombre(nombre){
- // formato tipico de TradingView: NASDAQ_META__1D__9_.csv
  const base=nombre.replace(/\.csv$/i,'');
  const tk=base.match(/(?:^|_)([A-Z][A-Z0-9.\-]{0,9})__/);
  const tf=base.match(/__(\d+[A-Za-z]?|[A-Za-z]+)__?/g);
@@ -231,7 +229,82 @@ zn.addEventListener('drop',e=>leer(e.dataTransfer.files[0]));
 document.addEventListener('dragover',e=>e.preventDefault());
 document.addEventListener('drop',e=>e.preventDefault());
 
-/* ───── escalas ───── */
+/* ───── TRADUCCIÓN PINE SCRIPT A JS (Motor Finviz) ───── */
+function calcularPineScript(i0, i1, qPct, esSoporte) {
+    let n = i1 - i0 + 1;
+    if(n < 20) return null; // i_minLargo
+    let q = qPct / 100.0;
+    let qi = Math.max(0, Math.min(n - 1, Math.round(q * (n - 1))));
+
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    let vals = [];
+    for(let k = 0; k < n; k++) {
+        let v = V[i0 + k];
+        let val = esSoporte ? v.zi : v.zs; // Zona cuerpo-mecha
+        vals.push(val);
+        sx += k; sy += val; sxx += k*k; sxy += k*val;
+    }
+    let den = (n * sxx - sx * sx);
+    let mOls = den !== 0 ? (n * sxy - sx * sy) / den : 0;
+    
+    let span = Math.max(Math.abs(V[i1].c) * 0.12 / 100.0, 0.01); // i_spanPend 0.12
+    let mejC = null, mejM = null, mejErr = Infinity;
+
+    // Pasos de pendiente (i_pasosPend = 81)
+    for(let paso = 0; paso < 81; paso++) {
+        let m = mOls - span + 2.0 * span * (paso / 80.0);
+        let res = [];
+        for(let k = 0; k < n; k++) res.push(vals[k] - (m * k));
+        res.sort((a, b) => a - b);
+        let c = res[qi];
+        
+        let err = 0;
+        for(let k = 0; k < n; k++) {
+            let d = vals[k] - (c + m * k);
+            err += d >= 0 ? q * d : (q - 1) * d;
+        }
+        if(err < mejErr) { mejErr = err; mejC = c; mejM = m; }
+    }
+    return { c: mejC, m: mejM };
+}
+
+$('autoFinviz').onclick = () => {
+    if(!V.length) { $('lec').innerHTML = 'Cargá el CSV primero.'; return; }
+    
+    let u = V.length - 1;
+    let iBase = Math.max(0, u - 200); // Ventana diaria i_vent = 200
+    
+    let maxP = -Infinity, iMax = iBase;
+    let minP = Infinity, iMin = iBase;
+    
+    // Buscar los pivotes estructurales recientes
+    for(let k = iBase; k <= u - 20; k++) {
+        if(V[k].h > maxP) { maxP = V[k].h; iMax = k; }
+        if(V[k].l < minP) { minP = V[k].l; iMin = k; }
+    }
+    
+    // Trazar Techo (Morado) al 97%
+    let techo = calcularPineScript(iMax, u, 97.0, false);
+    if(techo) {
+        let a = { i: iMax, p: techo.c, q: 'ajuste auto 97%', f: V[iMax].f };
+        let b = { i: u, p: techo.c + techo.m * (u - iMax), q: 'ajuste auto 97%', f: V[u].f };
+        L.push(Object.assign({ a, b, tipo: 'mayor', delIndicador: false }, medir(a, b, 'resistencia')));
+    }
+    
+    // Trazar Piso (Azul) al 8%
+    let piso = calcularPineScript(iMin, u, 8.0, true);
+    if(piso) {
+        let a = { i: iMin, p: piso.c, q: 'ajuste auto 8%', f: V[iMin].f };
+        let b = { i: u, p: piso.c + piso.m * (u - iMin), q: 'ajuste auto 8%', f: V[u].f };
+        L.push(Object.assign({ a, b, tipo: 'menor', delIndicador: false }, medir(a, b, 'soporte')));
+    }
+    
+    sel = L.length - 1;
+    refresh(); dib();
+    $('lec').innerHTML = '<b style="color:var(--morada)">✅ Algoritmo Finviz procesado. Resistencias trazadas.</b>';
+};
+
+/* ───── escalas y canvas ───── */
 function esc(){
  const w=cv.clientWidth,dpr=devicePixelRatio||1;
  cv.width=w*dpr;cv.height=ALTO*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
@@ -417,19 +490,16 @@ $('importar').onclick=()=>{
  const u=V.length-1;
  const idx={}; V.forEach((v,i)=>idx[v.f]=i);
  const cerca=f=>{ if(idx[f]!==undefined)return idx[f];
-   let mj=0,d=1e18; const t=Date.parse(f);
-   V.forEach((v,i)=>{const dd=Math.abs(Date.parse(v.f)-t);if(dd<d){d=dd;mj=i;}});
-   return mj; };
+  let mj=0,d=1e18; const t=Date.parse(f);
+  V.forEach((v,i)=>{const dd=Math.abs(Date.parse(v.f)-t);if(dd<d){d=dd;mj=i;}});
+  return mj; };
 
- // Se recorre TODO el texto. Una fila con fecha abre una linea nueva.
- // Las filas siguientes sin fecha aportan el valor de hoy y la pendiente.
- // Cualquier fila que parezca codigo se ignora.
  const filas=$('imp').value.split(/\r?\n/);
  const nuevas=[]; let act=null;
  filas.forEach(raw=>{
   const ln=raw.trim();
   if(!ln) return;
-  if(/[{}();=]|plot\(|input\.|line\.new|display\./.test(ln)) return;   // codigo
+  if(/[{}();=]|plot\(|input\.|line\.new|display\./.test(ln)) return;
   const fech=(ln.match(/\d{4}-\d{2}-\d{2}/g)||[]);
   const nums=(ln.replace(/\d{4}-\d{2}-\d{2}/g,' ').match(/-?\d+\.\d+/g)||[]).map(Number);
   const esMenor=/menor/i.test(ln);
