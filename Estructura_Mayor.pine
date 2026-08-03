@@ -1,0 +1,1770 @@
+//@version=6
+indicator("Estructura Mayor · Finviz Diario", "Estructura Mayor", overlay = true, max_lines_count = 30, max_bars_back = 600)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECONSTRUCCION INDEPENDIENTE · ESTRUCTURA MAYOR · SOLO 1D
+//
+// Objetivo de esta version:
+//   1. Tratar las dos paredes como lineas individuales validas.
+//   2. Emparejarlas como una estructura adaptativa.
+//   3. Usar indices de velas diarias, no milisegundos aproximados.
+//   4. Ajustar cada pared alrededor de varios contactos; la recta ya no esta
+//      obligada a atravesar exactamente dos pivotes.
+//   5. Puntuar la pareja con media geometrica y contencion historica.
+//   6. Admitir canales exteriores ascendentes, descendentes y laterales.
+//   7. Evitar que una estructura interior reciente desplace el canal grande.
+//   8. Normalizar contactos, anclas y margen por volatilidad diaria.
+//   9. Separar geometria de formacion y estado posterior a la ruptura.
+//  10. Conservar una estructura mayor rota sin que una figura menor reciente
+//      vuelva a entrenar o reemplace sus paredes.
+//  11. Competir entre canal exterior, triangulos y lineas mayores unilaterales.
+//  12. Permitir dos lineas principales de escalas distintas sin obligarlas a
+//      pertenecer a una misma figura.
+//  13. Separar deteccion y posicion: las mechas detectan pivotes, mientras la
+//      recta se ajusta dentro de la zona cuerpo-mecha. Los extremos antiguos
+//      reciben menos peso que los contactos recientes para no convertir una
+//      excursion transitoria en el ancla permanente de la estructura.
+//  14. Detectar la segunda escala con pivotes locales confirmados dentro del
+//      recinto mayor ya congelado. La pared inclinada se ajusta por cuantiles;
+//      la horizontal compite desde la zona de precio aceptado cuerpo-mecha.
+//      La figura menor no reemplaza ni reentrena la estructura principal.
+//  15. Admitir paredes menores unilaterales. Un piso ascendente se aprende
+//      solamente durante su formacion y se congela antes de un desplazamiento
+//      bajista excepcional; la ruptura posterior cambia su estado, no su recta.
+//  16. Reflejar el repertorio mayor en la segunda escala: canales menores
+//      ascendentes, descendentes y laterales; triangulos menores; techo
+//      descendente y piso ascendente unilaterales; y dos paredes menores
+//      independientes cuando no constituyen una pareja tradicional.
+//
+// La proyeccion a la derecha es solamente dibujo. Todas las pruebas de ancho,
+// posicion y contencion se hacen en la vela diaria actual.
+// ═══════════════════════════════════════════════════════════════════════════
+
+gR = "1 · Regimen diario"
+i_lb          = input.int(5, "Confirmacion de pivotes", minval = 2, maxval = 15, group = gR)
+i_vent        = input.int(200, "Ventana diaria", minval = 80, maxval = 400, group = gR)
+i_minLargo    = input.int(40, "Largo minimo", minval = 20, maxval = 200, group = gR)
+i_maxPivotes  = input.int(40, "Pivotes guardados", minval = 20, maxval = 80, group = gR)
+i_compReg     = input.int(3, "Pivotes previos para nuevo minimo", minval = 1, maxval = 8, group = gR)
+i_caidaReg    = input.float(0.20, "Ruptura estructural minima (%)", minval = 0.01, maxval = 5.0, step = 0.05, group = gR)
+i_maxReg      = input.int(6, "Regimenes candidatos", minval = 2, maxval = 10, group = gR)
+
+gA = "2 · Ajuste adaptativo"
+i_qArriba     = input.float(94.0, "Cuantil pared morada (%)", minval = 80.0, maxval = 99.5, step = 0.5, group = gA)
+i_qAbajo      = input.float(3.0, "Cuantil pared azul (%)", minval = 0.5, maxval = 20.0, step = 0.5, group = gA)
+i_qAbajoEstr  = input.float(5.0, "Cuantil azul estructural (%)", minval = 0.5, maxval = 20.0, step = 0.5, group = gA)
+i_qZonaPiso   = input.float(2.0, "Cuantil zona cuerpo-mecha azul (%)", minval = 0.5, maxval = 10.0, step = 0.5, group = gA)
+i_mechaAntigua = input.float(35.0, "Peso de mecha en contacto antiguo (%)", minval = 0.0, maxval = 100.0, step = 5.0, group = gA)
+i_spanPend    = input.float(0.12, "Rango de busqueda de pendiente (% precio/vela)", minval = 0.02, maxval = 0.60, step = 0.01, group = gA)
+i_pasosPend   = input.int(81, "Pasos de pendiente", minval = 21, maxval = 121, step = 10, group = gA)
+i_tol         = input.float(0.8, "Tolerancia de contacto (%)", minval = 0.1, maxval = 3.0, step = 0.1, group = gA)
+i_inicioCerca = input.float(2.5, "Distancia maxima al inicio (%)", minval = 0.5, maxval = 8.0, step = 0.25, group = gA)
+i_minPend     = input.float(0.00, "Pendiente minima absoluta (% precio/vela)", minval = 0.0, maxval = 0.30, step = 0.01, group = gA)
+i_pesoAjuste  = input.float(100.0, "Penalizacion del error de ajuste", minval = 0.0, maxval = 500.0, step = 10.0, group = gA)
+
+gP = "3 · Pareja"
+i_anMin       = input.float(1.5, "Ancho minimo hoy (%)", minval = 0.2, maxval = 20.0, step = 0.5, group = gP)
+i_anMax       = input.float(40.0, "Ancho maximo hoy (%)", minval = 3.0, maxval = 90.0, step = 1.0, group = gP)
+i_fuera       = input.float(5.0, "Margen del precio fuera (%)", minval = 0.0, maxval = 20.0, step = 0.5, group = gP)
+i_expR        = input.float(2.86, "Peso de rebotes", minval = 0.5, maxval = 5.0, step = 0.02, group = gP)
+i_expL        = input.float(0.63, "Peso del largo", minval = 0.0, maxval = 2.0, step = 0.01, group = gP)
+i_penProf     = input.float(3.0, "Penalizacion por profundidad", minval = 0.0, maxval = 20.0, step = 0.5, group = gP)
+i_penCierres  = input.float(0.05, "Penalizacion por cierres fuera", minval = 0.0, maxval = 0.50, step = 0.01, group = gP)
+i_penMechas   = input.float(0.015, "Penalizacion por mechas fuera", minval = 0.0, maxval = 0.20, step = 0.005, group = gP)
+i_penExpansion = input.float(0.30, "Penalizacion por expansion", minval = 0.0, maxval = 2.0, step = 0.05, group = gP)
+i_pesoEstr    = input.float(0.20, "Prior pared estructural", minval = 0.01, maxval = 1.0, step = 0.01, group = gP)
+i_expEscala   = input.float(1.80, "Prioridad del canal exterior", minval = 0.0, maxval = 4.0, step = 0.05, group = gP)
+i_multEspejo  = input.float(3.0, "Largo minimo pared contraparte (x)", minval = 1.0, maxval = 6.0, step = 0.25, group = gP)
+i_minRebTotal = input.int(4, "Evidencia minima conjunta del canal", minval = 2, maxval = 12, group = gP)
+
+gH = "4 · Estructura historica"
+i_histActiva  = input.bool(true, "Conservar figuras mayores rotas", group = gH)
+i_pasosHist   = input.int(41, "Pasos de pendiente historica", minval = 21, maxval = 81, step = 10, group = gH)
+i_qTriTecho   = input.float(97.0, "Cuantil techo de cuerpo (%)", minval = 80.0, maxval = 99.5, step = 0.5, group = gH)
+i_qTriPiso    = input.float(8.0, "Cuantil piso de cierre (%)", minval = 1.0, maxval = 40.0, step = 1.0, group = gH, tooltip = "MEDIDO sobre 10 pisos reales de Finviz en los activos SPY, TLT, AAPL, KO, META, TSLA y BAC: el cuantil que reproduce cada linea tiene mediana 8,2 % y rango intercuartil 5,9-11,2. Casos: SPY 1,2 / TLT 3,5 / AAPL 5,9 / META 5,9 / TSLA 7,0 / BAC 9,3 / TLT 10,4 / SPY 11,4 / KO 12,7 / TSLA 17,1. En la misma auditoria las resistencias dieron mediana 97,4 %, que coincide con i_qTriTecho=97: el techo ya estaba bien calibrado y no se toca. La asimetria es real: Finviz pega sus resistencias al extremo y deja sus soportes mas arriba del minimo.")
+i_qIndPiso    = input.float(8.0, "Cuantil piso unilateral (%)", minval = 0.0, maxval = 20.0, step = 1.0, group = gH, tooltip = "MEDIDO sobre 10 pisos reales de Finviz en los activos SPY, TLT, AAPL, KO, META, TSLA y BAC: el cuantil que reproduce cada linea tiene mediana 8,2 % y rango intercuartil 5,9-11,2. Casos: SPY 1,2 / TLT 3,5 / AAPL 5,9 / META 5,9 / TSLA 7,0 / BAC 9,3 / TLT 10,4 / SPY 11,4 / KO 12,7 / TSLA 17,1. En la misma auditoria las resistencias dieron mediana 97,4 %, que coincide con i_qTriTecho=97: el techo ya estaba bien calibrado y no se toca. La asimetria es real: Finviz pega sus resistencias al extremo y deja sus soportes mas arriba del minimo.")
+i_reanclaHist = input.int(15, "Reanclaje historico maximo (velas)", minval = 0, maxval = 30, group = gH)
+i_decaeHist   = input.float(0.008, "Decaimiento tras resolucion", minval = 0.0, maxval = 0.05, step = 0.001, group = gH)
+i_ratioCanal  = input.float(2.40, "Relacion maxima de pendientes del canal", minval = 1.10, maxval = 6.0, step = 0.10, group = gH)
+i_fracIndMayor = input.float(0.55, "Escala minima unilateral (fraccion ventana)", minval = 0.30, maxval = 0.90, step = 0.05, group = gH)
+i_fracMenor   = input.float(0.55, "Escala maxima menor (fraccion estructura mayor)", minval = 0.30, maxval = 0.75, step = 0.05, group = gH)
+i_maxViolInd  = input.float(2.0, "Velas violando unilateral maxima (%)", minval = 0.0, maxval = 10.0, step = 0.5, group = gH)
+i_penProfInd  = input.float(12.0, "Penalizacion profundidad unilateral", minval = 0.0, maxval = 30.0, step = 1.0, group = gH)
+i_penViolInd  = input.float(0.75, "Penalizacion por violacion unilateral", minval = 0.0, maxval = 3.0, step = 0.05, group = gH)
+i_congelaMenorATR = input.float(1.80, "Desplazamiento que congela pared menor (ATR)", minval = 1.0, maxval = 4.0, step = 0.10, group = gH)
+i_pendMenorMin = input.float(0.02, "Pendiente minima pared menor (% precio/vela)", minval = 0.0, maxval = 0.30, step = 0.01, group = gH)
+
+gD = "5 · Dibujo"
+i_cTecho      = input.color(#E040FB, "Pared morada", group = gD)
+i_cPiso       = input.color(#40C4FF, "Pared azul", group = gD)
+i_grosor      = input.int(2, "Grosor", minval = 1, maxval = 4, group = gD)
+i_proy        = input.int(0, "Proyeccion derecha (velas)", minval = 0, maxval = 120, group = gD)
+i_mostrarMenor = input.bool(true, "Mostrar estructura menor anidada", group = gD)
+i_panel       = input.bool(true, "Panel de auditoria", group = gD)
+
+bool esD1 = timeframe.isdaily and timeframe.multiplier == 1
+float atrPct = close != 0.0 ? ta.atr(14) / math.abs(close) * 100.0 : 0.0
+float atr14 = ta.atr(14)
+// En activos tranquilos se conservan exactamente los parametros del usuario.
+// En activos volatiles las tolerancias crecen con el ATR diario.
+float tolPctAdapt = math.max(i_tol, math.min(3.0, atrPct * 0.35))
+float inicioCercaAdapt = math.max(i_inicioCerca, math.min(8.0, atrPct * 0.80))
+float margenFueraAdapt = math.max(i_fuera, math.min(20.0, atrPct * 1.10))
+float umbralRegAdapt = math.max(i_caidaReg, math.min(3.0, atrPct * 0.10))
+float tol = tolPctAdapt / 100.0
+
+// ═══ PIVOTES CONFIRMADOS, GUARDADOS POR INDICE DE VELA ═══
+float ph = ta.pivothigh(high, i_lb, i_lb)
+float pl = ta.pivotlow(low, i_lb, i_lb)
+
+var array<int> hI = array.new_int()
+var array<float> hP = array.new_float()
+var array<int> lI = array.new_int()
+var array<float> lP = array.new_float()
+var int ultimoH = na
+var int ultimoL = na
+
+if esD1 and not na(ph)
+    int idxH = bar_index - i_lb
+    if na(ultimoH) or idxH != ultimoH
+        array.push(hI, idxH)
+        array.push(hP, ph)
+        ultimoH := idxH
+        if array.size(hI) > i_maxPivotes
+            array.shift(hI)
+            array.shift(hP)
+
+if esD1 and not na(pl)
+    int idxL = bar_index - i_lb
+    if na(ultimoL) or idxL != ultimoL
+        array.push(lI, idxL)
+        array.push(lP, pl)
+        ultimoL := idxL
+        if array.size(lI) > i_maxPivotes
+            array.shift(lI)
+            array.shift(lP)
+
+// Fuentes del ajuste actual:
+//   0 high · 1 cuerpo superior · 2 low · 3 cuerpo inferior
+//   4 zona superior adaptativa · 5 zona inferior adaptativa.
+// En las fuentes adaptativas, la formacion nace cerca del cuerpo (precio
+// aceptado) y aumenta gradualmente el peso de la mecha hacia el presente.
+f_valor_ajuste(int back, int fuente, float progreso) =>
+    float cuerpoSup = math.max(open[back], close[back])
+    float cuerpoInf = math.min(open[back], close[back])
+    float p0 = i_mechaAntigua / 100.0
+    float p = p0 + (1.0 - p0) * math.max(0.0, math.min(1.0, progreso))
+    fuente == 0 ? high[back] : fuente == 1 ? cuerpoSup : fuente == 2 ? low[back] : fuente == 3 ? cuerpoInf : fuente == 4 ? cuerpoSup + p * (high[back] - cuerpoSup) : cuerpoInf - p * (cuerpoInf - low[back])
+
+// Regresion cuantílica aproximada:
+// - centra la busqueda en la pendiente OLS;
+// - prueba pendientes en unidades precio/vela;
+// - para cada pendiente coloca el intercepto en el cuantil solicitado;
+// - conserva la menor perdida asimetrica.
+f_ajustar(int inicio, int fuente, int excluirFinal, float qPct) =>
+    int finAjuste = bar_index - excluirFinal
+    int n = finAjuste - inicio + 1
+    float mejorC = na
+    float mejorM = na
+    float mejorPerdida = 1e20
+    if n >= 5
+        float sx = 0.0
+        float sy = 0.0
+        float sxx = 0.0
+        float sxy = 0.0
+        for x = 0 to n - 1
+            int back = bar_index - (inicio + x)
+            float progreso = n > 1 ? float(x) / float(n - 1) : 1.0
+            float v = f_valor_ajuste(back, fuente, progreso)
+            float xf = float(x)
+            sx += xf
+            sy += v
+            sxx += xf * xf
+            sxy += xf * v
+        float nf = float(n)
+        float den = nf * sxx - sx * sx
+        float mOls = den != 0.0 ? (nf * sxy - sx * sy) / den : 0.0
+        float span = math.max(math.abs(close) * i_spanPend / 100.0, syminfo.mintick)
+        float q = qPct / 100.0
+        int qi = math.max(0, math.min(n - 1, int(math.round(q * float(n - 1)))))
+
+        for paso = 0 to i_pasosPend - 1
+            float fr = i_pasosPend > 1 ? float(paso) / float(i_pasosPend - 1) : 0.5
+            float m = mOls - span + 2.0 * span * fr
+            array<float> residuos = array.new_float(n, 0.0)
+            for x = 0 to n - 1
+                int back = bar_index - (inicio + x)
+                float progreso = n > 1 ? float(x) / float(n - 1) : 1.0
+                float v = f_valor_ajuste(back, fuente, progreso)
+                array.set(residuos, x, v - m * float(x))
+            array.sort(residuos, order.ascending)
+            float c = array.get(residuos, qi)
+            float perdida = 0.0
+            for x = 0 to n - 1
+                int back = bar_index - (inicio + x)
+                float progreso = n > 1 ? float(x) / float(n - 1) : 1.0
+                float v = f_valor_ajuste(back, fuente, progreso)
+                float e = v - (c + m * float(x))
+                perdida += e >= 0.0 ? q * e : (q - 1.0) * e
+            if perdida < mejorPerdida
+                mejorPerdida := perdida
+                mejorC := c
+                mejorM := m
+
+        mejorPerdida := mejorPerdida / (float(n) * math.max(math.abs(close), syminfo.mintick))
+    [mejorC, mejorM, mejorPerdida]
+
+// Fuentes geometricas. Finviz no parece limitar todas sus paredes a mechas:
+// algunas siguen extremos, otras cuerpos/cierres y las horizontales locales
+// pueden representar el precio aceptado entre cuerpo y mecha. El tipo de
+// fuente es una propiedad de la plantilla, nunca del simbolo.
+f_valor_hist(int back, int fuente) =>
+    float cuerpoSup = math.max(open[back], close[back])
+    float cuerpoInf = math.min(open[back], close[back])
+    float pesoAceptado = i_mechaAntigua / 100.0
+    float zonaSup = cuerpoSup + pesoAceptado * (high[back] - cuerpoSup)
+    float zonaInf = cuerpoInf - pesoAceptado * (cuerpoInf - low[back])
+    fuente == 0 ? high[back] : fuente == 1 ? cuerpoSup : fuente == 2 ? low[back] : fuente == 3 ? cuerpoInf : fuente == 5 ? zonaSup : fuente == 6 ? zonaInf : close[back]
+
+// Mantiene una pendiente nacida de dos pivotes estructurales y desplaza la
+// recta al cuantil elegido. Se usa para una linea unilateral: la pendiente la
+// decide la arquitectura de pivotes y la altura la decide el comportamiento
+// completo entre ambos contactos, nunca una coordenada fija del activo.
+f_intercepto_pend_hist(int inicio, int finAjuste, int fuente, float m, float qPct) =>
+    int n = finAjuste - inicio + 1
+    float c = na
+    if n > 0
+        array<float> residuos = array.new_float(n, 0.0)
+        for x = 0 to n - 1
+            int back = bar_index - (inicio + x)
+            array.set(residuos, x, f_valor_hist(back, fuente) - m * float(x))
+        array.sort(residuos, order.ascending)
+        float q = qPct / 100.0
+        int qi = math.max(0, math.min(n - 1, int(math.round(q * float(n - 1)))))
+        c := array.get(residuos, qi)
+    c
+
+// Ajuste cuantílico congelado en un fin historico explicito. A diferencia de
+// f_ajustar(), las velas posteriores no pueden cambiar su pendiente.
+f_ajustar_hist(int inicio, int finAjuste, int fuente, float qPct) =>
+    int n = finAjuste - inicio + 1
+    float mejorC = na
+    float mejorM = na
+    float mejorPerdida = 1e20
+    if n >= 20
+        float sx = 0.0
+        float sy = 0.0
+        float sxx = 0.0
+        float sxy = 0.0
+        for x = 0 to n - 1
+            int back = bar_index - (inicio + x)
+            float v = f_valor_hist(back, fuente)
+            float xf = float(x)
+            sx += xf
+            sy += v
+            sxx += xf * xf
+            sxy += xf * v
+        float nf = float(n)
+        float den = nf * sxx - sx * sx
+        float mOls = den != 0.0 ? (nf * sxy - sx * sy) / den : 0.0
+        float span = math.max(math.abs(close) * i_spanPend / 100.0, syminfo.mintick)
+        float q = qPct / 100.0
+        int qi = math.max(0, math.min(n - 1, int(math.round(q * float(n - 1)))))
+
+        for paso = 0 to i_pasosHist - 1
+            float fr = i_pasosHist > 1 ? float(paso) / float(i_pasosHist - 1) : 0.5
+            float m = mOls - span + 2.0 * span * fr
+            array<float> residuos = array.new_float(n, 0.0)
+            for x = 0 to n - 1
+                int back = bar_index - (inicio + x)
+                float v = f_valor_hist(back, fuente)
+                array.set(residuos, x, v - m * float(x))
+            array.sort(residuos, order.ascending)
+            float c = array.get(residuos, qi)
+            float perdida = 0.0
+            for x = 0 to n - 1
+                int back = bar_index - (inicio + x)
+                float v = f_valor_hist(back, fuente)
+                float e = v - (c + m * float(x))
+                perdida += e >= 0.0 ? q * e : (q - 1.0) * e
+            if perdida < mejorPerdida
+                mejorPerdida := perdida
+                mejorC := c
+                mejorM := m
+
+        mejorPerdida := mejorPerdida / (float(n) * math.max(math.abs(close), syminfo.mintick))
+    [mejorC, mejorM, mejorPerdida]
+
+// El regimen conserva su identidad. Puede desplazarse unos dias hasta el
+// primer contacto visible, pero no regalar su nombre a una linea meses despues.
+f_reanclar_hist(int inicio, int finAjuste, float yInicio, float m) =>
+    int nuevoInicio = na
+    float nuevoY = na
+    int ultimo = math.min(finAjuste - i_minLargo + 1, inicio + i_reanclaHist)
+    if ultimo >= inicio
+        for idx = inicio to ultimo
+            int back = bar_index - idx
+            float lv = yInicio + m * float(idx - inicio)
+            float h = high[back]
+            float l = low[back]
+            float cerca = lv > h ? (lv - h) / lv * 100.0 : lv < l ? (l - lv) / lv * 100.0 : 0.0
+            if na(nuevoInicio) and cerca <= inicioCercaAdapt
+                nuevoInicio := idx
+                nuevoY := lv
+    [nuevoInicio, nuevoY]
+
+// Primera salida persistente de dos cierres. La salida solamente cierra la
+// etapa de formacion; nunca modifica ni elimina la recta aprendida.
+f_ruptura_hist(int inicio, float yInicio, float m, bool arriba, int desde) =>
+    int ruptura = na
+    int corrida = 0
+    int arranque = na
+    int primero = math.max(desde, inicio)
+    if primero <= bar_index
+        for idx = primero to bar_index
+            int back = bar_index - idx
+            float lv = yInicio + m * float(idx - inicio)
+            float margen = math.max(nz(atr14[back], 0.0) * 0.20, math.abs(lv) * 0.0015)
+            bool afuera = arriba ? close[back] > lv + margen : close[back] < lv - margen
+            if afuera
+                if corrida == 0
+                    arranque := idx
+                corrida += 1
+                if corrida >= 2 and na(ruptura)
+                    ruptura := arranque
+            else
+                corrida := 0
+                arranque := na
+    ruptura
+
+// Evidencia de una pared durante su fase de formacion. Para una plantilla de
+// cuerpos se auditan cuerpos; para una de cierres se auditan cierres.
+f_pared_hist(int inicio, float yInicio, float m, bool arriba, int fuente, int finForm, float perdida) =>
+    int grupos = 0
+    int separacion = i_lb + 1
+    int violaciones = 0
+    float profundidad = 0.0
+    if finForm >= inicio
+        for idx = inicio to finForm
+            int back = bar_index - idx
+            float lv = yInicio + m * float(idx - inicio)
+            float v = f_valor_hist(back, fuente)
+            float dd = lv != 0.0 ? (v - lv) / lv : 0.0
+            bool contacto = math.abs(dd) <= tol
+            if contacto and separacion > i_lb
+                grupos += 1
+            separacion := contacto ? 0 : separacion + 1
+            float exceso = arriba ? math.max(dd - tol, 0.0) : math.max(-dd - tol, 0.0)
+            profundidad += exceso
+            if arriba ? dd > tol * 2.5 : dd < -tol * 2.5
+                violaciones += 1
+
+    int toquesPivote = 0
+    int ultimoToque = -1000000
+    if arriba and array.size(hI) > 0
+        for q = 0 to array.size(hI) - 1
+            int idx = array.get(hI, q)
+            if idx >= inicio and idx <= finForm
+                int back = bar_index - idx
+                float lv = yInicio + m * float(idx - inicio)
+                float dd = lv != 0.0 ? math.abs((f_valor_hist(back, fuente) - lv) / lv) : 1e10
+                if dd <= tol and idx - ultimoToque > 1
+                    toquesPivote += 1
+                    ultimoToque := idx
+    if not arriba and array.size(lI) > 0
+        for q = 0 to array.size(lI) - 1
+            int idx = array.get(lI, q)
+            if idx >= inicio and idx <= finForm
+                int back = bar_index - idx
+                float lv = yInicio + m * float(idx - inicio)
+                float dd = lv != 0.0 ? math.abs((f_valor_hist(back, fuente) - lv) / lv) : 1e10
+                if dd <= tol and idx - ultimoToque > 1
+                    toquesPivote += 1
+                    ultimoToque := idx
+
+    int contactos = math.max(grupos, toquesPivote)
+    int largo = math.max(finForm - inicio + 1, 1)
+    float fuerza = contactos >= 2 ? math.pow(float(contactos), i_expR) * math.pow(float(largo), i_expL) / (1.0 + profundidad * 10.0) / (1.0 + perdida * i_pesoAjuste) : 0.0
+    [fuerza, contactos, violaciones, profundidad]
+
+// Estadisticas de una pared. Los rebotes combinan pivotes confirmados con
+// grupos de contactos diarios; asi se conserva la estructura y tambien el
+// borde reciente que aun no puede ser un pivote de cinco velas.
+f_pared(int inicio, float yInicio, float m, bool arriba) =>
+    int n = bar_index - inicio + 1
+    int toquesPivote = 0
+    int ultimoToque = -1000000
+    if arriba and array.size(hI) > 0
+        for q = 0 to array.size(hI) - 1
+            int idx = array.get(hI, q)
+            if idx >= inicio
+                float lv = yInicio + m * float(idx - inicio)
+                float dd = lv != 0.0 ? math.abs((array.get(hP, q) - lv) / lv) : 1e10
+                if dd <= tol and idx - ultimoToque > 1
+                    toquesPivote += 1
+                    ultimoToque := idx
+    if not arriba and array.size(lI) > 0
+        for q = 0 to array.size(lI) - 1
+            int idx = array.get(lI, q)
+            if idx >= inicio
+                float lv = yInicio + m * float(idx - inicio)
+                float dd = lv != 0.0 ? math.abs((array.get(lP, q) - lv) / lv) : 1e10
+                if dd <= tol and idx - ultimoToque > 1
+                    toquesPivote += 1
+                    ultimoToque := idx
+
+    int grupos = 0
+    int separacion = i_lb + 1
+    int violaciones = 0
+    float profundidad = 0.0
+    for x = 0 to n - 1
+        int idx = inicio + x
+        int back = bar_index - idx
+        float lv = yInicio + m * float(x)
+        float v = arriba ? high[back] : low[back]
+        float dd = lv != 0.0 ? (v - lv) / lv : 0.0
+        bool contacto = math.abs(dd) <= tol
+        if contacto and separacion > i_lb
+            grupos += 1
+        separacion := contacto ? 0 : separacion + 1
+        float exceso = arriba ? math.max(dd - tol, 0.0) : math.max(-dd - tol, 0.0)
+        profundidad += exceso
+        if arriba ? dd > tol * 2.5 : dd < -tol * 2.5
+            violaciones += 1
+
+    // El primer contacto, tanto de pivote como de grupo diario, establece la
+    // recta. Solo los contactos posteriores son rebotes.
+    int rebotesPivote = math.max(toquesPivote - 1, 0)
+    int rebotesGrupos = math.max(grupos - 1, 0)
+    int rebotes = math.max(rebotesPivote, rebotesGrupos)
+    // Una ruptura cambia el estado de la pared, pero no borra los rebotes que
+    // la hicieron estructural. La profundidad sigue reduciendo su fuerza.
+    int efectivos = rebotes
+    float fuerza = efectivos > 0 ? math.pow(float(efectivos), i_expR) * math.pow(float(math.max(n - 1, 1)), i_expL) / (1.0 + profundidad * 10.0) : 0.0
+    int back0 = bar_index - inicio
+    float h0 = high[back0]
+    float l0 = low[back0]
+    float cerca = yInicio > h0 ? (yInicio - h0) / yInicio * 100.0 : yInicio < l0 ? (l0 - yInicio) / yInicio * 100.0 : 0.0
+    [fuerza, rebotes, violaciones, cerca, profundidad]
+
+// Si el ajuste estadistico nace lejos de la vela que inicio el regimen, mover
+// solamente el comienzo visible hasta el primer contacto real. La pendiente y
+// el ajuste no cambian. Esto permite que la misma formula funcione en activos
+// con recorridos y volatilidades muy distintos sin inventar coordenadas.
+f_reanclar(int inicio, float yInicio, float m) =>
+    int nuevoInicio = na
+    float nuevoY = na
+    int n = bar_index - inicio + 1
+    int ultimoXValido = n - i_minLargo
+    if ultimoXValido >= 0
+        for x = 0 to ultimoXValido
+            int idx = inicio + x
+            int back = bar_index - idx
+            float lv = yInicio + m * float(x)
+            float h = high[back]
+            float l = low[back]
+            float cerca = lv > h ? (lv - h) / lv * 100.0 : lv < l ? (l - lv) / lv * 100.0 : 0.0
+            if na(nuevoInicio) and cerca <= inicioCercaAdapt
+                nuevoInicio := idx
+                nuevoY := lv
+    [nuevoInicio, nuevoY]
+
+var array<line> lineas = array.new_line()
+
+// ═══ EXPORTACION DE LAS LINEAS ═══
+// Publica las coordenadas de lo que se dibuja para que salgan como columnas
+// al exportar el CSV desde TradingView. Sirve para revisarlas fuera del grafico.
+// No cambia nada de lo que se dibuja ni de lo que se calcula.
+var float x_may_ancla1 = na
+var float x_may_precio1 = na
+var float x_may_pend1 = na
+var float x_may_ancla2 = na
+var float x_may_precio2 = na
+var float x_may_pend2 = na
+var table pan = table.new(position.top_right, 2, 12, border_width = 1)
+
+if barstate.islast
+    while array.size(lineas) > 0
+        line.delete(array.pop(lineas))
+
+    if i_panel
+        table.clear(pan, 0, 0, 1, 11)
+
+    if not esD1
+        if i_panel
+            table.cell(pan, 0, 0, "ESTRUCTURA MAYOR", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+            table.cell(pan, 1, 0, "Solo 1D", text_color = color.orange, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+            table.cell(pan, 0, 1, "Temporalidad", text_color = color.silver, text_size = size.tiny)
+            table.cell(pan, 1, 1, timeframe.period, text_color = color.red, text_size = size.tiny)
+    else
+        int primerIndice = bar_index - i_vent + 1
+
+        // ═══ REGIMENES ESTRUCTURALES BIDIRECCIONALES ═══
+        // Se consideran tanto rupturas de minimos como rupturas de maximos.
+        // El umbral se adapta al ATR para normalizar activos distintos.
+        array<int> regimenesL = array.new_int()
+        array<int> regimenesH = array.new_int()
+        if array.size(lI) > 1
+            for q = 1 to array.size(lI) - 1
+                int idx = array.get(lI, q)
+                if idx >= primerIndice and bar_index - idx >= i_minLargo
+                    int desde = math.max(0, q - i_compReg)
+                    float minimoPrevio = 1e20
+                    int cuentaPrevios = 0
+                    for r = desde to q - 1
+                        minimoPrevio := math.min(minimoPrevio, array.get(lP, r))
+                        cuentaPrevios += 1
+                    float valor = array.get(lP, q)
+                    float caida = cuentaPrevios > 0 and minimoPrevio > 0.0 ? (minimoPrevio - valor) / minimoPrevio * 100.0 : 0.0
+                    if caida >= umbralRegAdapt
+                        array.push(regimenesL, idx)
+
+        if array.size(hI) > 1
+            for q = 1 to array.size(hI) - 1
+                int idx = array.get(hI, q)
+                if idx >= primerIndice and bar_index - idx >= i_minLargo
+                    int desde = math.max(0, q - i_compReg)
+                    float maximoPrevio = -1e20
+                    int cuentaPrevios = 0
+                    for r = desde to q - 1
+                        maximoPrevio := math.max(maximoPrevio, array.get(hP, r))
+                        cuentaPrevios += 1
+                    float valor = array.get(hP, q)
+                    float subida = cuentaPrevios > 0 and maximoPrevio > 0.0 ? (valor - maximoPrevio) / maximoPrevio * 100.0 : 0.0
+                    if subida >= umbralRegAdapt
+                        array.push(regimenesH, idx)
+
+        // Reservar cupos para ambos lados. Asi una secuencia de maximos nuevos
+        // no expulsa todos los regimenes nacidos en minimos, ni viceversa.
+        int maxRegL = math.max(1, int(math.ceil(float(i_maxReg) * 0.5)))
+        int maxRegH = math.max(1, i_maxReg - maxRegL)
+        while array.size(regimenesL) > maxRegL
+            array.shift(regimenesL)
+        while array.size(regimenesH) > maxRegH
+            array.shift(regimenesH)
+
+        array<int> regimenes = array.new_int()
+        array<bool> regimenDesdeMinimo = array.new_bool()
+        if array.size(regimenesL) > 0
+            for q = 0 to array.size(regimenesL) - 1
+                array.push(regimenes, array.get(regimenesL, q))
+                array.push(regimenDesdeMinimo, true)
+        if array.size(regimenesH) > 0
+            for q = 0 to array.size(regimenesH) - 1
+                array.push(regimenes, array.get(regimenesH, q))
+                array.push(regimenDesdeMinimo, false)
+
+        // Fallback universal: si no hubo ruptura estructural, usar los
+        // extremos confirmados mas profundos de la ventana.
+        if array.size(regimenes) == 0
+            int mejorIdxL = na
+            float mejorLow = 1e20
+            if array.size(lI) > 0
+                for q = 0 to array.size(lI) - 1
+                    int idx = array.get(lI, q)
+                    float valor = array.get(lP, q)
+                    if idx >= primerIndice and bar_index - idx >= i_minLargo and valor < mejorLow
+                        mejorLow := valor
+                        mejorIdxL := idx
+            int mejorIdxH = na
+            float mejorHigh = -1e20
+            if array.size(hI) > 0
+                for q = 0 to array.size(hI) - 1
+                    int idx = array.get(hI, q)
+                    float valor = array.get(hP, q)
+                    if idx >= primerIndice and bar_index - idx >= i_minLargo and valor > mejorHigh
+                        mejorHigh := valor
+                        mejorIdxH := idx
+            if not na(mejorIdxL)
+                array.push(regimenes, mejorIdxL)
+                array.push(regimenDesdeMinimo, true)
+            if not na(mejorIdxH) and (na(mejorIdxL) or mejorIdxH != mejorIdxL)
+                array.push(regimenes, mejorIdxH)
+                array.push(regimenDesdeMinimo, false)
+
+        // ═══ CANDIDATAS AJUSTADAS ═══
+        array<int> uI = array.new_int()
+        array<float> uY = array.new_float()
+        array<float> uM = array.new_float()
+        array<float> uF = array.new_float()
+        array<int> uR = array.new_int()
+        array<int> uV = array.new_int()
+        array<bool> uOrigenMin = array.new_bool()
+
+        array<int> dI = array.new_int()
+        array<float> dY = array.new_float()
+        array<float> dM = array.new_float()
+        array<float> dF = array.new_float()
+        array<int> dR = array.new_int()
+        array<int> dV = array.new_int()
+
+        if array.size(regimenes) > 0
+            for q = 0 to array.size(regimenes) - 1
+                int inicioReg = array.get(regimenes, q)
+                bool desdeMinimo = array.get(regimenDesdeMinimo, q)
+
+                // Desde un minimo, el techo comienza a ajustarse en el primer
+                // maximo posterior. Desde un maximo, ya puede ajustarse ahi.
+                int inicioFitArriba = desdeMinimo ? na : inicioReg
+                if desdeMinimo and array.size(hI) > 0
+                    for h = 0 to array.size(hI) - 1
+                        int idxH = array.get(hI, h)
+                        if na(inicioFitArriba) and idxH >= inicioReg
+                            inicioFitArriba := idxH
+                if not na(inicioFitArriba) and bar_index - inicioFitArriba + 1 >= 20
+                    [cA, mA, perdidaA] = f_ajustar(inicioFitArriba, 0, 0, i_qArriba)
+                    if not na(cA) and not na(mA)
+                        float yA = cA - mA * float(inicioFitArriba - inicioReg)
+                        [anclaA, yAnclaA] = f_reanclar(inicioReg, yA, mA)
+                        if not na(anclaA) and not na(yAnclaA)
+                            float yHoyA = yAnclaA + mA * float(bar_index - anclaA)
+                            float pendPctA = yHoyA != 0.0 ? mA / yHoyA * 100.0 : 0.0
+                            [fA0, rA, vA, cercaA, profA] = f_pared(anclaA, yAnclaA, mA, true)
+                            float fA = fA0 / (1.0 + perdidaA * i_pesoAjuste)
+                            if math.abs(pendPctA) >= i_minPend and fA > 0.0
+                                array.push(uI, anclaA)
+                                array.push(uY, yAnclaA)
+                                array.push(uM, mA)
+                                array.push(uF, fA)
+                                array.push(uR, rA)
+                                array.push(uV, vA)
+                                array.push(uOrigenMin, desdeMinimo)
+
+                // Un piso puede nacer directamente de un regimen de minimos o
+                // aparecer como contraparte de un regimen de maximos. En este
+                // segundo caso debe demostrar un recorrido mucho mayor para no
+                // confundir una pared interior reciente con el canal exterior.
+                int inicioFitAbajo = desdeMinimo ? inicioReg : na
+                if not desdeMinimo and array.size(lI) > 0
+                    for l = 0 to array.size(lI) - 1
+                        int idxL = array.get(lI, l)
+                        if na(inicioFitAbajo) and idxL >= inicioReg
+                            inicioFitAbajo := idxL
+
+                if not na(inicioFitAbajo) and bar_index - inicioFitAbajo + 1 >= 20
+                    // Variante de borde: incorpora hasta la vela actual y
+                    // conserva toda la informacion reciente confirmada.
+                    [cB, mB, perdidaB] = f_ajustar(inicioFitAbajo, 2, 0, i_qAbajo)
+                    if not na(cB) and not na(mB)
+                        float yB = cB - mB * float(inicioFitAbajo - inicioReg)
+                        [anclaB, yAnclaB] = f_reanclar(inicioReg, yB, mB)
+                        if not na(anclaB) and not na(yAnclaB)
+                            float yHoyB = yAnclaB + mB * float(bar_index - anclaB)
+                            float pendPctB = yHoyB != 0.0 ? mB / yHoyB * 100.0 : 0.0
+                            [fB0, rB, vB, cercaB, profB] = f_pared(anclaB, yAnclaB, mB, false)
+                            float fB = fB0 / (1.0 + perdidaB * i_pesoAjuste)
+                            int largoMinEspejoB = int(math.ceil(float(i_minLargo) * i_multEspejo))
+                            bool exteriorB = desdeMinimo or bar_index - anclaB + 1 >= largoMinEspejoB
+                            if exteriorB and math.abs(pendPctB) >= i_minPend and fB > 0.0
+                                array.push(dI, anclaB)
+                                array.push(dY, yAnclaB)
+                                array.push(dM, mB)
+                                array.push(dF, fB)
+                                array.push(dR, rB)
+                                array.push(dV, vB)
+
+                    // Variante de zona aceptada: el pivote se descubre con
+                    // low, pero la recta aprende sobre un precio que avanza
+                    // desde el cuerpo hacia la mecha. Compite con la variante
+                    // de extremos; nunca la sustituye por decreto.
+                    [cZ, mZ, perdidaZ] = f_ajustar(inicioFitAbajo, 5, 0, i_qZonaPiso)
+                    if not na(cZ) and not na(mZ)
+                        float yZ = cZ - mZ * float(inicioFitAbajo - inicioReg)
+                        [anclaZ, yAnclaZ] = f_reanclar(inicioReg, yZ, mZ)
+                        if not na(anclaZ) and not na(yAnclaZ)
+                            float yHoyZ = yAnclaZ + mZ * float(bar_index - anclaZ)
+                            float pendPctZ = yHoyZ != 0.0 ? mZ / yHoyZ * 100.0 : 0.0
+                            [fZ0, rZ, vZ, cercaZ, profZ] = f_pared(anclaZ, yAnclaZ, mZ, false)
+                            float fZ = fZ0 / (1.0 + perdidaZ * i_pesoAjuste)
+                            int largoMinEspejoZ = int(math.ceil(float(i_minLargo) * i_multEspejo))
+                            bool exteriorZ = desdeMinimo or bar_index - anclaZ + 1 >= largoMinEspejoZ
+                            if exteriorZ and math.abs(pendPctZ) >= i_minPend and fZ > 0.0
+                                array.push(dI, anclaZ)
+                                array.push(dY, yAnclaZ)
+                                array.push(dM, mZ)
+                                array.push(dF, fZ)
+                                array.push(dR, rZ)
+                                array.push(dV, vZ)
+
+                    // Variante estructural: las ultimas i_lb velas todavia no
+                    // forman un pivote confirmado. Se excluyen solo del ajuste
+                    // de pendiente, pero la pared resultante se proyecta y se
+                    // audita contra el precio actual. Esto evita que un gap
+                    // terminal rote artificialmente todo el piso exterior.
+                    if bar_index - i_lb - inicioFitAbajo + 1 >= 20
+                        [cE, mE, perdidaE] = f_ajustar(inicioFitAbajo, 2, i_lb, i_qAbajoEstr)
+                        if not na(cE) and not na(mE)
+                            float yE = cE - mE * float(inicioFitAbajo - inicioReg)
+                            [anclaE, yAnclaE] = f_reanclar(inicioReg, yE, mE)
+                            if not na(anclaE) and not na(yAnclaE)
+                                float yHoyE = yAnclaE + mE * float(bar_index - anclaE)
+                                float pendPctE = yHoyE != 0.0 ? mE / yHoyE * 100.0 : 0.0
+                                [fE0, rE, vE, cercaE, profE] = f_pared(anclaE, yAnclaE, mE, false)
+                                float fE = fE0 / (1.0 + perdidaE * i_pesoAjuste) * i_pesoEstr
+                                int largoMinEspejoE = int(math.ceil(float(i_minLargo) * i_multEspejo))
+                                bool exteriorE = desdeMinimo or bar_index - anclaE + 1 >= largoMinEspejoE
+                                if exteriorE and math.abs(pendPctE) >= i_minPend and fE > 0.0
+                                    array.push(dI, anclaE)
+                                    array.push(dY, yAnclaE)
+                                    array.push(dM, mE)
+                                    array.push(dF, fE)
+                                    array.push(dR, rE)
+                                    array.push(dV, vE)
+
+        // ═══ EMPAREJAR: MEDIA GEOMETRICA × COMPATIBILIDAD HISTORICA ═══
+        float mejorPar = -1.0
+        int selU = -1
+        int selD = -1
+        int parejasValidas = 0
+        int diagCierres = 0
+        int diagMechas = 0
+        float diagAncho = 0.0
+        float diagPos = 0.0
+        float diagCompat = 0.0
+
+        if array.size(uI) > 0 and array.size(dI) > 0
+            for a = 0 to array.size(uI) - 1
+                int iU = array.get(uI, a)
+                float yU = array.get(uY, a)
+                float mU = array.get(uM, a)
+                bool origenMinU = array.get(uOrigenMin, a)
+                for b = 0 to array.size(dI) - 1
+                    int iD = array.get(dI, b)
+                    float yD = array.get(dY, b)
+                    float mD = array.get(dM, b)
+
+                    // Las paredes son independientes y cualquiera puede nacer
+                    // primero. Para formar un canal sus direcciones deben ser
+                    // compatibles y siempre conservar el orden techo > piso.
+                    int inicioComun = math.max(iU, iD)
+                    bool orden = true
+                    int cierresFuera = 0
+                    int mechasFuera = 0
+                    float profundidad = 0.0
+                    for idx = inicioComun to bar_index
+                        int back = bar_index - idx
+                        float arriba = yU + mU * float(idx - iU)
+                        float abajo = yD + mD * float(idx - iD)
+                        if arriba <= abajo or abajo <= 0.0
+                            orden := false
+                        float cArriba = orden ? math.max((close[back] - arriba) / arriba, 0.0) : 0.0
+                        float cAbajo = orden ? math.max((abajo - close[back]) / abajo, 0.0) : 0.0
+                        float wArriba = orden ? math.max((high[back] - arriba) / arriba, 0.0) : 0.0
+                        float wAbajo = orden ? math.max((abajo - low[back]) / abajo, 0.0) : 0.0
+                        float salidaC = cArriba + cAbajo
+                        float salidaW = wArriba + wAbajo
+                        if salidaC > 0.0
+                            cierresFuera += 1
+                        if salidaW > 0.0
+                            mechasFuera += 1
+                        profundidad += salidaC + 0.35 * salidaW
+
+                    float arribaHoy = yU + mU * float(bar_index - iU)
+                    float abajoHoy = yD + mD * float(bar_index - iD)
+                    float anchoHoy = abajoHoy > 0.0 ? (arribaHoy - abajoHoy) / abajoHoy * 100.0 : -1.0
+                    float margen = close * margenFueraAdapt / 100.0
+                    bool envuelveHoy = close >= abajoHoy - margen and close <= arribaHoy + margen
+                    float pendNormParU = close != 0.0 ? mU / math.abs(close) * 100.0 : 0.0
+                    float pendNormParD = close != 0.0 ? mD / math.abs(close) * 100.0 : 0.0
+                    float epsDireccion = 0.02
+                    bool ambasLaterales = math.abs(pendNormParU) <= epsDireccion and math.abs(pendNormParD) <= epsDireccion
+                    bool mismaDireccion = (pendNormParU >= 0.0 and pendNormParD >= 0.0) or (pendNormParU <= 0.0 and pendNormParD <= 0.0) or ambasLaterales
+                    // Un techo exterior ascendente se desarrolla desde un
+                    // regimen de minimos; uno descendente, desde un regimen de
+                    // maximos. Esta regla separa el canal mayor de subcanales
+                    // recientes con la misma apariencia local.
+                    bool origenCompatible = math.abs(pendNormParU) <= epsDireccion or (pendNormParU > 0.0 and origenMinU) or (pendNormParU < 0.0 and not origenMinU)
+                    // Una pared debil puede sobrevivir si la pareja completa
+                    // tiene evidencia suficiente; no se exige fuerza simetrica.
+                    int rebU = array.get(uR, a)
+                    int rebD = array.get(dR, b)
+                    bool paredesMaduras = rebU >= 1 and rebD >= 1 and rebU + rebD >= i_minRebTotal
+                    if orden and mismaDireccion and origenCompatible and paredesMaduras and anchoHoy >= i_anMin and anchoHoy <= i_anMax and envuelveHoy
+                        parejasValidas += 1
+                        float geometrica = math.sqrt(array.get(uF, a) * array.get(dF, b))
+                        float arribaInicio = yU + mU * float(inicioComun - iU)
+                        float abajoInicio = yD + mD * float(inicioComun - iD)
+                        float expansionPct = close != 0.0 ? math.max((arribaHoy - abajoHoy) - (arribaInicio - abajoInicio), 0.0) / math.abs(close) * 100.0 : 0.0
+                        float compat = math.exp(-i_penProf * profundidad - i_penExpansion * expansionPct) / (1.0 + i_penCierres * float(cierresFuera) + i_penMechas * float(mechasFuera))
+                        int largoComun = bar_index - inicioComun + 1
+                        float escalaExterior = math.pow(float(largoComun) / float(i_minLargo), i_expEscala)
+                        float puntaje = geometrica * compat * escalaExterior
+                        if puntaje > mejorPar
+                            mejorPar := puntaje
+                            selU := a
+                            selD := b
+                            diagCierres := cierresFuera
+                            diagMechas := mechasFuera
+                            diagAncho := anchoHoy
+                            diagPos := arribaHoy > abajoHoy ? (close - abajoHoy) / (arribaHoy - abajoHoy) * 100.0 : 0.0
+                            diagCompat := compat
+
+        // ═══ BANCO HISTORICO: TRIANGULOS MAYORES ═══
+        // Cada horizonte aprende una pared una sola vez y luego la proyecta.
+        // Los largos son escalas temporales, no fechas ni excepciones por ticker.
+        array<int> tUI = array.new_int()
+        array<float> tUY = array.new_float()
+        array<float> tUM = array.new_float()
+        array<float> tUF = array.new_float()
+        array<int> tUC = array.new_int()
+        array<int> tUFin = array.new_int()
+        array<int> tURot = array.new_int()
+
+        array<int> tDI = array.new_int()
+        array<float> tDY = array.new_float()
+        array<float> tDM = array.new_float()
+        array<float> tDF = array.new_float()
+        array<int> tDC = array.new_int()
+        array<int> tDFin = array.new_int()
+        array<int> tDRot = array.new_int()
+
+        array<int> horizontes = array.from(35, 45, 60, 80, 100, 120)
+        if i_histActiva and array.size(regimenes) > 0
+            for q = 0 to array.size(regimenes) - 1
+                int inicioReg = array.get(regimenes, q)
+                bool desdeMinimo = array.get(regimenDesdeMinimo, q)
+
+                // En un triangulo tradicional el techo nace de un regimen de
+                // maximos y el piso de uno de minimos. Las contrapartes
+                // extrapoladas pertenecen al motor de canales, no a este banco.
+                int inicioFitU = not desdeMinimo ? inicioReg : na
+
+                if not na(inicioFitU)
+                    int ultimoFinU = na
+                    for z = 0 to array.size(horizontes) - 1
+                        int finFitU = math.min(bar_index, inicioFitU + array.get(horizontes, z) - 1)
+                        if finFitU - inicioFitU + 1 >= 20 and (na(ultimoFinU) or finFitU != ultimoFinU)
+                            ultimoFinU := finFitU
+                            // Techo de cuerpo: reduce la influencia de una sola
+                            // mecha sin convertirlo en una regla por activo.
+                            [cHU, mHU, perdidaHU] = f_ajustar_hist(inicioFitU, finFitU, 1, i_qTriTecho)
+                            if not na(cHU) and not na(mHU)
+                                float yRegU = cHU - mHU * float(inicioFitU - inicioReg)
+                                [anclaHU, yAnclaHU] = f_reanclar_hist(inicioReg, finFitU, yRegU, mHU)
+                                if not na(anclaHU) and not na(yAnclaHU)
+                                    int rotHU = f_ruptura_hist(anclaHU, yAnclaHU, mHU, true, finFitU + 1)
+                                    int finHU = na(rotHU) ? bar_index : rotHU - 1
+                                    [fHU, cHU2, vHU, pHU] = f_pared_hist(anclaHU, yAnclaHU, mHU, true, 1, finHU, perdidaHU)
+                                    if fHU > 0.0 and cHU2 >= 2
+                                        array.push(tUI, anclaHU)
+                                        array.push(tUY, yAnclaHU)
+                                        array.push(tUM, mHU)
+                                        array.push(tUF, fHU)
+                                        array.push(tUC, cHU2)
+                                        array.push(tUFin, finHU)
+                                        array.push(tURot, rotHU)
+
+                int inicioFitD = desdeMinimo ? inicioReg : na
+
+                if not na(inicioFitD)
+                    int ultimoFinD = na
+                    for z = 0 to array.size(horizontes) - 1
+                        int finFitD = math.min(bar_index, inicioFitD + array.get(horizontes, z) - 1)
+                        if finFitD - inicioFitD + 1 >= 20 and (na(ultimoFinD) or finFitD != ultimoFinD)
+                            ultimoFinD := finFitD
+                            // El piso de cierre representa la familia de lineas
+                            // internas que Finviz conserva junto a paredes de mecha.
+                            [cHD, mHD, perdidaHD] = f_ajustar_hist(inicioFitD, finFitD, 4, i_qTriPiso)
+                            if not na(cHD) and not na(mHD)
+                                float yRegD = cHD - mHD * float(inicioFitD - inicioReg)
+                                [anclaHD, yAnclaHD] = f_reanclar_hist(inicioReg, finFitD, yRegD, mHD)
+                                if not na(anclaHD) and not na(yAnclaHD)
+                                    int rotHD = f_ruptura_hist(anclaHD, yAnclaHD, mHD, false, finFitD + 1)
+                                    int finHD = na(rotHD) ? bar_index : rotHD - 1
+                                    [fHD, cHD2, vHD, pHD] = f_pared_hist(anclaHD, yAnclaHD, mHD, false, 4, finHD, perdidaHD)
+                                    if fHD > 0.0 and cHD2 >= 2
+                                        array.push(tDI, anclaHD)
+                                        array.push(tDY, yAnclaHD)
+                                        array.push(tDM, mHD)
+                                        array.push(tDF, fHD)
+                                        array.push(tDC, cHD2)
+                                        array.push(tDFin, finHD)
+                                        array.push(tDRot, rotHD)
+
+        float mejorTri = -1.0
+        int selTU = -1
+        int selTD = -1
+        int triFinForm = na
+        int triRotura = na
+        float triApex = na
+        int triFueraC = 0
+        int triFueraW = 0
+        string triTipo = ""
+
+        if array.size(tUI) > 0 and array.size(tDI) > 0
+            for a = 0 to array.size(tUI) - 1
+                int iTU = array.get(tUI, a)
+                float yTU = array.get(tUY, a)
+                float mTU = array.get(tUM, a)
+                float nTU = close != 0.0 ? mTU / math.abs(close) * 100.0 : 0.0
+                for b = 0 to array.size(tDI) - 1
+                    int iTD = array.get(tDI, b)
+                    float yTD = array.get(tDY, b)
+                    float mTD = array.get(tDM, b)
+                    float nTD = close != 0.0 ? mTD / math.abs(close) * 100.0 : 0.0
+                    float epsTri = 0.02
+                    bool simetrico = nTU < -epsTri and nTD > epsTri
+                    bool ascendente = math.abs(nTU) <= epsTri and nTD > epsTri
+                    bool descendente = nTU < -epsTri and math.abs(nTD) <= epsTri
+                    bool plantillaTri = simetrico or ascendente or descendente
+                    int inicioComun = math.max(iTU, iTD)
+                    float uInicio = yTU + mTU * float(inicioComun - iTU)
+                    float dInicio = yTD + mTD * float(inicioComun - iTD)
+                    float deltaM = mTD - mTU
+                    float apexF = deltaM > 0.0 ? float(inicioComun) + (uInicio - dInicio) / deltaM : na
+                    int finComun = math.min(array.get(tUFin, a), array.get(tDFin, b))
+                    if not na(apexF)
+                        finComun := math.min(finComun, int(math.floor(apexF)))
+
+                    if plantillaTri and not na(apexF) and apexF > float(inicioComun) and finComun - inicioComun + 1 >= 20
+                        bool ordenTri = true
+                        int fueraC = 0
+                        int fueraW = 0
+                        float profundidadTri = 0.0
+                        int eventosU = 0
+                        int eventosD = 0
+                        int cambios = 0
+                        int ladoPrevio = 0
+                        int ultimoEvento = -1000000
+
+                        for idx = inicioComun to finComun
+                            int back = bar_index - idx
+                            float u = yTU + mTU * float(idx - iTU)
+                            float d = yTD + mTD * float(idx - iTD)
+                            if u <= d or d <= 0.0
+                                ordenTri := false
+                            float sC = ordenTri ? math.max((close[back] - u) / u, 0.0) + math.max((d - close[back]) / d, 0.0) : 0.0
+                            float sW = ordenTri ? math.max((high[back] - u) / u, 0.0) + math.max((d - low[back]) / d, 0.0) : 0.0
+                            if sC > 0.0
+                                fueraC += 1
+                            if sW > 0.0
+                                fueraW += 1
+                            profundidadTri += sC + 0.35 * sW
+
+                            float cuerpoAlto = math.max(open[back], close[back])
+                            float distU = u != 0.0 ? math.abs((cuerpoAlto - u) / u) : 1e10
+                            float distD = d != 0.0 ? math.abs((close[back] - d) / d) : 1e10
+                            bool cercaU = distU <= tol
+                            bool cercaD = distD <= tol
+                            int lado = cercaU and (not cercaD or distU <= distD) ? 1 : cercaD ? -1 : 0
+                            if lado != 0
+                                bool nuevo = lado != ladoPrevio or idx - ultimoEvento > i_lb
+                                if nuevo
+                                    if lado == 1
+                                        eventosU += 1
+                                    else
+                                        eventosD += 1
+                                    if ladoPrevio != 0 and lado != ladoPrevio
+                                        cambios += 1
+                                    ladoPrevio := lado
+                                ultimoEvento := idx
+
+                        int rotU = array.get(tURot, a)
+                        int rotD = array.get(tDRot, b)
+                        int eventoRot = na(rotU) ? rotD : na(rotD) ? rotU : math.min(rotU, rotD)
+                        int eventoTiempo = na(eventoRot) ? finComun : eventoRot
+                        float progreso = float(eventoTiempo - inicioComun) / math.max(apexF - float(inicioComun), 1.0)
+                        float timing = math.exp(-math.pow((progreso - 0.82) / 0.22, 2.0))
+                        float anchoInicio = dInicio > 0.0 ? (uInicio - dInicio) / dInicio * 100.0 : -1.0
+                        float uFin = yTU + mTU * float(finComun - iTU)
+                        float dFin = yTD + mTD * float(finComun - iTD)
+                        float anchoFin = dFin > 0.0 ? (uFin - dFin) / dFin * 100.0 : -1.0
+                        float contraccion = anchoInicio > 0.0 ? math.max(0.0, math.min(1.0, (anchoInicio - anchoFin) / anchoInicio)) : 0.0
+                        float balance = 1.0
+                        if simetrico
+                            float ratio = math.max(math.abs(mTU), syminfo.mintick) / math.max(math.abs(mTD), syminfo.mintick)
+                            balance := math.exp(-0.35 * math.abs(math.log(ratio)))
+                        float plantilla = (0.75 + contraccion) * (0.55 + 0.45 * timing) * balance
+                        float compatTri = math.exp(-0.50 * profundidadTri) / (1.0 + 0.01 * float(fueraC) + 0.005 * float(fueraW))
+                        int largoForm = finComun - inicioComun + 1
+                        int largoTotal = bar_index - math.min(iTU, iTD) + 1
+                        float escalaTri = math.pow(float(largoForm) / float(i_minLargo), 1.35) * math.pow(float(largoTotal) / float(i_minLargo), 0.55)
+                        float persistencia = math.exp(-i_decaeHist * float(math.max(bar_index - finComun, 0)))
+                        float geometricaTri = math.sqrt(array.get(tUF, a) * array.get(tDF, b))
+                        float puntajeTri = geometricaTri * compatTri * plantilla * escalaTri * persistencia
+                        bool secuenciaValida = eventosU >= 2 and eventosD >= 2 and cambios >= 2
+                        if ordenTri and secuenciaValida and puntajeTri > mejorTri
+                            mejorTri := puntajeTri
+                            selTU := a
+                            selTD := b
+                            triFinForm := finComun
+                            triRotura := eventoRot
+                            triApex := apexF
+                            triFueraC := fueraC
+                            triFueraW := fueraW
+                            triTipo := simetrico ? "Triangulo simetrico" : ascendente ? "Triangulo ascendente" : "Triangulo descendente"
+
+        // ═══ BANCO DE LINEAS MAYORES UNILATERALES ═══
+        // Finviz no siempre presenta dos paredes de una misma figura. Una
+        // resistencia de escala larga y un soporte de escala intermedia pueden
+        // coexistir sin compartir pendiente, origen ni etapa de formacion.
+        // Este banco exige una fraccion material de la ventana diaria. Una
+        // pared mas corta solamente puede sobrevivir si pertenece a una figura
+        // mayor validada; por si sola se considera estructura menor y se omite.
+        int minIndMayor = math.max(i_minLargo, int(math.ceil(float(i_vent) * i_fracIndMayor)))
+        float mejorIndU = -1.0
+        int indUI = -1
+        int indUFin = -1
+        int indURot = na
+        int indUC = 0
+        float indUY = na
+        float indUM = na
+
+        if array.size(hI) > 1
+            for a = 0 to array.size(hI) - 2
+                int i1 = array.get(hI, a)
+                if i1 >= primerIndice and bar_index - i1 + 1 >= minIndMayor
+                    for b = a + 1 to array.size(hI) - 1
+                        int i2 = array.get(hI, b)
+                        int largoForm = i2 - i1 + 1
+                        if largoForm >= minIndMayor
+                            float y1 = array.get(hP, a)
+                            float y2 = array.get(hP, b)
+                            float m = (y2 - y1) / float(i2 - i1)
+                            int rot = f_ruptura_hist(i1, y1, m, true, i2 + 1)
+                            [fuerza, contactos, violaciones, profundidad] = f_pared_hist(i1, y1, m, true, 0, i2, 0.0)
+                            int ultimoEvento = na(rot) ? i2 : math.max(i2, rot)
+                            float persistencia = math.exp(-i_decaeHist * float(math.max(bar_index - ultimoEvento, 0)))
+                            float escala = math.pow(float(largoForm) / float(i_minLargo), 1.0)
+                            int maxViolaciones = math.max(1, int(math.floor(float(largoForm) * i_maxViolInd / 100.0)))
+                            float exterioridad = math.exp(-i_penProfInd * profundidad) / (1.0 + i_penViolInd * float(violaciones))
+                            float puntaje = fuerza * escala * persistencia * exterioridad
+                            if contactos >= 2 and violaciones <= maxViolaciones and puntaje > mejorIndU
+                                mejorIndU := puntaje
+                                indUI := i1
+                                indUFin := i2
+                                indURot := rot
+                                indUC := contactos
+                                indUY := y1
+                                indUM := m
+
+        // El piso unilateral parte del regimen de minimos mas reciente que
+        // aun posee escala mayor. Si no existe una ruptura formal se usa el
+        // minimo confirmado mas profundo como respaldo universal.
+        int baseIndD = na
+        if array.size(regimenesL) > 0
+            baseIndD := array.get(regimenesL, array.size(regimenesL) - 1)
+        else if array.size(lI) > 0
+            float minimoBase = 1e20
+            for a = 0 to array.size(lI) - 1
+                int idx = array.get(lI, a)
+                float valor = array.get(lP, a)
+                if idx >= primerIndice and bar_index - idx + 1 >= i_minLargo and valor < minimoBase
+                    minimoBase := valor
+                    baseIndD := idx
+
+        float mejorIndD = -1.0
+        int indDI = -1
+        int indDFin = -1
+        int indDRot = na
+        int indDC = 0
+        float indDY = na
+        float indDM = na
+
+        if not na(baseIndD) and array.size(lI) > 1
+            for a = 0 to array.size(lI) - 2
+                int i1 = array.get(lI, a)
+                if i1 == baseIndD
+                    for b = a + 1 to array.size(lI) - 1
+                        int i2 = array.get(lI, b)
+                        int largoForm = i2 - i1 + 1
+                        if largoForm >= minIndMayor
+                            int back1 = bar_index - i1
+                            int back2 = bar_index - i2
+                            float cuerpo1 = math.min(open[back1], close[back1])
+                            float cuerpo2 = math.min(open[back2], close[back2])
+                            float m = (cuerpo2 - cuerpo1) / float(i2 - i1)
+                            float y1 = f_intercepto_pend_hist(i1, i2, 3, m, i_qIndPiso)
+                            if not na(y1)
+                                int rot = f_ruptura_hist(i1, y1, m, false, i2 + 1)
+                                [fuerza, contactos, violaciones, profundidad] = f_pared_hist(i1, y1, m, false, 3, i2, 0.0)
+                                int ultimoEvento = na(rot) ? i2 : math.max(i2, rot)
+                                float persistencia = math.exp(-i_decaeHist * float(math.max(bar_index - ultimoEvento, 0)))
+                                float escala = math.pow(float(largoForm) / float(i_minLargo), 1.0)
+                                int maxViolaciones = math.max(1, int(math.floor(float(largoForm) * i_maxViolInd / 100.0)))
+                                float exterioridad = math.exp(-i_penProfInd * profundidad) / (1.0 + i_penViolInd * float(violaciones))
+                                float puntaje = fuerza * escala * persistencia * exterioridad
+                                if contactos >= 2 and violaciones <= maxViolaciones and puntaje > mejorIndD
+                                    mejorIndD := puntaje
+                                    indDI := i1
+                                    indDFin := i2
+                                    indDRot := rot
+                                    indDC := contactos
+                                    indDY := y1
+                                    indDM := m
+
+        // REPOSICION FINAL EN LA ZONA CUERPO-MECHA.
+        // La pareja de pivotes se descubre con las mechas, pero la geometria
+        // visible no queda encadenada a sus puntas. El contacto antiguo usa
+        // una fraccion de la sombra; el contacto reciente conserva el extremo
+        // porque contiene la informacion mas actual de la estructura.
+        float pesoAntiguo = i_mechaAntigua / 100.0
+        if indUI >= 0 and indUFin > indUI
+            int backU1 = bar_index - indUI
+            int backU2 = bar_index - indUFin
+            float cuerpoU1 = math.max(open[backU1], close[backU1])
+            float zonaU1 = cuerpoU1 + pesoAntiguo * (high[backU1] - cuerpoU1)
+            float zonaU2 = high[backU2]
+            float mZonaU = (zonaU2 - zonaU1) / float(indUFin - indUI)
+            [fZonaU, cZonaU, vZonaU, pZonaU] = f_pared_hist(indUI, zonaU1, mZonaU, true, 0, indUFin, 0.0)
+            int maxVZonaU = math.max(1, int(math.floor(float(indUFin - indUI + 1) * i_maxViolInd / 100.0)))
+            if cZonaU >= 2 and vZonaU <= maxVZonaU + 1
+                indUY := zonaU1
+                indUM := mZonaU
+                indUC := cZonaU
+                indURot := f_ruptura_hist(indUI, indUY, indUM, true, indUFin + 1)
+
+        if indDI >= 0 and indDFin > indDI
+            int backD1 = bar_index - indDI
+            int backD2 = bar_index - indDFin
+            float cuerpoD1 = math.min(open[backD1], close[backD1])
+            float zonaD1 = cuerpoD1 - pesoAntiguo * (cuerpoD1 - low[backD1])
+            float zonaD2 = low[backD2]
+            float mZonaD = (zonaD2 - zonaD1) / float(indDFin - indDI)
+            [fZonaD, cZonaD, vZonaD, pZonaD] = f_pared_hist(indDI, zonaD1, mZonaD, false, 2, indDFin, 0.0)
+            int maxVZonaD = math.max(1, int(math.floor(float(indDFin - indDI + 1) * i_maxViolInd / 100.0)))
+            if cZonaD >= 2 and vZonaD <= maxVZonaD + 1
+                indDY := zonaD1
+                indDM := mZonaD
+                indDC := cZonaD
+                indDRot := f_ruptura_hist(indDI, indDY, indDM, false, indDFin + 1)
+
+        // Un canal exige paralelismo, no solo que ambas pendientes tengan el
+        // mismo signo. Si la relacion es excesiva, las paredes compiten como
+        // estructuras individuales en lugar de ser forzadas a una pareja.
+        bool canalCoherente = false
+        float ratioCanal = na
+        if selU >= 0 and selD >= 0
+            float mSelU = array.get(uM, selU)
+            float mSelD = array.get(dM, selD)
+            float nSelU = close != 0.0 ? math.abs(mSelU / close * 100.0) : 0.0
+            float nSelD = close != 0.0 ? math.abs(mSelD / close * 100.0) : 0.0
+            float mayorPend = math.max(nSelU, nSelD)
+            float menorPend = math.min(nSelU, nSelD)
+            bool ambasPlanas = mayorPend <= 0.02
+            ratioCanal := menorPend > 0.02 ? mayorPend / menorPend : ambasPlanas ? 1.0 : 1e10
+            canalCoherente := ratioCanal <= i_ratioCanal
+
+        int inicioCanalMayor = selU >= 0 and selD >= 0 ? math.min(array.get(uI, selU), array.get(dI, selD)) : bar_index
+        int inicioTriMayor = selTU >= 0 and selTD >= 0 ? math.min(array.get(tUI, selTU), array.get(tDI, selTD)) : bar_index
+        bool triMasExterior = selTU >= 0 and selTD >= 0 and (selU < 0 or selD < 0 or inicioTriMayor + int(math.ceil(float(i_minLargo) * 0.5)) < inicioCanalMayor)
+
+        // ═══ SEGUNDA ESCALA: FIGURA MENOR ANIDADA ═══
+        // Primero se congela el recinto mayor que ya gano. Despues se construye
+        // un banco nuevo desde pivotes locales confirmados que nacieron dentro
+        // de ese recinto. Asi la escala menor no depende de que haya ocurrido
+        // otra ruptura de regimen mayor.
+        bool mayorTieneU = false
+        bool mayorTieneD = false
+        bool mayorEsRecinto = false
+        int mayorUI = na
+        float mayorUY = na
+        float mayorUM = na
+        int mayorDI = na
+        float mayorDY = na
+        float mayorDM = na
+
+        if triMasExterior
+            mayorEsRecinto := true
+            mayorTieneU := true
+            mayorTieneD := true
+            mayorUI := array.get(tUI, selTU)
+            mayorUY := array.get(tUY, selTU)
+            mayorUM := array.get(tUM, selTU)
+            mayorDI := array.get(tDI, selTD)
+            mayorDY := array.get(tDY, selTD)
+            mayorDM := array.get(tDM, selTD)
+        else if selU >= 0 and selD >= 0 and canalCoherente
+            mayorEsRecinto := true
+            mayorTieneU := true
+            mayorTieneD := true
+            mayorUI := array.get(uI, selU)
+            mayorUY := array.get(uY, selU)
+            mayorUM := array.get(uM, selU)
+            mayorDI := array.get(dI, selD)
+            mayorDY := array.get(dY, selD)
+            mayorDM := array.get(dM, selD)
+        else
+            // Una pared mayor unilateral tambien define contexto jerarquico.
+            // La escala menor se limita por el lado que exista, sin inventar
+            // una pared opuesta para fabricar un canal.
+            if indUI >= 0
+                mayorTieneU := true
+                mayorUI := indUI
+                mayorUY := indUY
+                mayorUM := indUM
+            if indDI >= 0
+                mayorTieneD := true
+                mayorDI := indDI
+                mayorDY := indDY
+                mayorDM := indDM
+
+        bool hayMayorJerarquica = mayorTieneU or mayorTieneD
+
+        float mejorMenor = -1.0
+        int menorUI = na
+        float menorUY = na
+        float menorUM = na
+        int menorDI = na
+        float menorDY = na
+        float menorDM = na
+        int menorRotura = na
+        string menorTipo = ""
+        float menorContencion = na
+        int menorBancoU = 0
+        int menorBancoD = 0
+        int menorPares = 0
+        int menorEventosU = 0
+        int menorEventosD = 0
+        float mejorTechoMenor = -1.0
+        int techoMenorI = na
+        float techoMenorY = na
+        float techoMenorM = na
+        int techoMenorFinForm = na
+        int techoMenorRotura = na
+        float techoMenorContencion = na
+        int techoMenorContactos = 0
+        float mejorPisoMenor = -1.0
+        int pisoMenorI = na
+        float pisoMenorY = na
+        float pisoMenorM = na
+        int pisoMenorFinForm = na
+        int pisoMenorRotura = na
+        float pisoMenorContencion = na
+        int pisoMenorContactos = 0
+        int menorTechos = 0
+        int menorPisos = 0
+
+        if i_mostrarMenor and hayMayorJerarquica
+            int inicioMayorComun = mayorTieneU and mayorTieneD ? math.max(mayorUI, mayorDI) : mayorTieneU ? mayorUI : mayorDI
+            int inicioMayorVisible = mayorTieneU and mayorTieneD ? math.min(mayorUI, mayorDI) : mayorTieneU ? mayorUI : mayorDI
+            int largoMayor = bar_index - inicioMayorVisible + 1
+            int separacionEscalas = math.max(5, int(math.ceil(float(i_minLargo) * 0.25)))
+            int primerMenor = inicioMayorComun + separacionEscalas
+            int maxLargoMenor = math.max(20, int(math.floor(float(largoMayor) * i_fracMenor)))
+
+            // La arquitectura local separa explicitamente rectas inclinadas y
+            // horizontales. Una horizontal no es una regresion casi plana: es
+            // una hipotesis mas simple colocada en el precio aceptado de un
+            // pivote (cuerpo + una fraccion estable de su mecha).
+            array<int> mUI = array.new_int()
+            array<float> mUY = array.new_float()
+            array<float> mUM = array.new_float()
+            array<float> mUF = array.new_float()
+            array<int> mUS = array.new_int()
+            array<bool> mUPlana = array.new_bool()
+
+            array<int> mDI = array.new_int()
+            array<float> mDY = array.new_float()
+            array<float> mDM = array.new_float()
+            array<float> mDF = array.new_float()
+            array<int> mDS = array.new_int()
+            array<bool> mDPlana = array.new_bool()
+
+            if array.size(hI) > 0
+                for q = 0 to array.size(hI) - 1
+                    int iMH = array.get(hI, q)
+                    int edadMH = bar_index - iMH + 1
+                    if iMH >= primerMenor and edadMH >= 20 and edadMH <= maxLargoMenor
+                        int backMH = bar_index - iMH
+                        [cMH, mMH, perdidaMH] = f_ajustar_hist(iMH, bar_index, 0, i_qTriTecho)
+                        float pivoteMH = array.get(hP, q)
+                        float distanciaMH = not na(cMH) and pivoteMH != 0.0 ? math.abs((cMH - pivoteMH) / pivoteMH) : 1e10
+                        float pendPctMH = not na(mMH) and close != 0.0 ? math.abs(mMH / close * 100.0) : 0.0
+                        if not na(cMH) and not na(mMH) and pendPctMH >= i_pendMenorMin and distanciaMH <= tol
+                            [fMH, contactosMH, violMH, profMH] = f_pared_hist(iMH, cMH, mMH, true, 0, bar_index, perdidaMH)
+                            if fMH > 0.0 and contactosMH >= 2
+                                array.push(mUI, iMH)
+                                array.push(mUY, cMH)
+                                array.push(mUM, mMH)
+                                array.push(mUF, fMH)
+                                array.push(mUS, 0)
+                                array.push(mUPlana, false)
+
+                        float zonaMH = f_valor_hist(backMH, 5)
+                        [fMHF, contactosMHF, violMHF, profMHF] = f_pared_hist(iMH, zonaMH, 0.0, true, 5, bar_index, 0.0)
+                        if fMHF > 0.0 and contactosMHF >= 2
+                            array.push(mUI, iMH)
+                            array.push(mUY, zonaMH)
+                            array.push(mUM, 0.0)
+                            array.push(mUF, fMHF)
+                            array.push(mUS, 5)
+                            array.push(mUPlana, true)
+
+            if array.size(lI) > 0
+                for q = 0 to array.size(lI) - 1
+                    int iML = array.get(lI, q)
+                    int edadML = bar_index - iML + 1
+                    if iML >= primerMenor and edadML >= 20 and edadML <= maxLargoMenor
+                        int backML = bar_index - iML
+                        float zonaML = f_valor_hist(backML, 6)
+                        [cML, mML, perdidaML] = f_ajustar_hist(iML, bar_index, 6, i_qTriPiso)
+                        float distanciaML = not na(cML) and zonaML != 0.0 ? math.abs((cML - zonaML) / zonaML) : 1e10
+                        float pendPctML = not na(mML) and close != 0.0 ? math.abs(mML / close * 100.0) : 0.0
+                        if not na(cML) and not na(mML) and pendPctML >= i_pendMenorMin and distanciaML <= tol
+                            [fML, contactosML, violML, profML] = f_pared_hist(iML, cML, mML, false, 6, bar_index, perdidaML)
+                            if fML > 0.0 and contactosML >= 2
+                                array.push(mDI, iML)
+                                array.push(mDY, cML)
+                                array.push(mDM, mML)
+                                array.push(mDF, fML)
+                                array.push(mDS, 6)
+                                array.push(mDPlana, false)
+
+                        [fMLF, contactosMLF, violMLF, profMLF] = f_pared_hist(iML, zonaML, 0.0, false, 6, bar_index, 0.0)
+                        if fMLF > 0.0 and contactosMLF >= 2
+                            array.push(mDI, iML)
+                            array.push(mDY, zonaML)
+                            array.push(mDM, 0.0)
+                            array.push(mDF, fMLF)
+                            array.push(mDS, 6)
+                            array.push(mDPlana, true)
+
+            menorBancoU := array.size(mUI)
+            menorBancoD := array.size(mDI)
+
+            if menorBancoU > 0 and menorBancoD > 0
+                for a = 0 to menorBancoU - 1
+                    int iMU = array.get(mUI, a)
+                    float yMU = array.get(mUY, a)
+                    float mMU = array.get(mUM, a)
+                    int fuenteMU = array.get(mUS, a)
+                    bool planaMU = array.get(mUPlana, a)
+                    for b = 0 to menorBancoD - 1
+                        int iMD = array.get(mDI, b)
+                        float yMD = array.get(mDY, b)
+                        float mMD = array.get(mDM, b)
+                        int fuenteMD = array.get(mDS, b)
+                        bool planaMD = array.get(mDPlana, b)
+
+                        // Los triangulos conservan la secuencia canonica H-L.
+                        // En un canal las dos paredes son independientes y
+                        // pueden comenzar en distinto orden, igual que en la
+                        // arquitectura de escala mayor.
+                        bool simetrico = not planaMU and not planaMD and mMU < 0.0 and mMD > 0.0
+                        bool ascendente = planaMU and not planaMD and mMD > 0.0
+                        bool descendente = not planaMU and planaMD and mMU < 0.0
+                        float nMU = close != 0.0 ? math.abs(mMU / close * 100.0) : 0.0
+                        float nMD = close != 0.0 ? math.abs(mMD / close * 100.0) : 0.0
+                        float mayorPendMenor = math.max(nMU, nMD)
+                        float menorPendMenor = math.min(nMU, nMD)
+                        float ratioPendMenor = menorPendMenor >= i_pendMenorMin and menorPendMenor > 0.0 ? mayorPendMenor / menorPendMenor : planaMU and planaMD ? 1.0 : 1e10
+                        bool canalAscendente = not planaMU and not planaMD and mMU > 0.0 and mMD > 0.0 and ratioPendMenor <= i_ratioCanal
+                        bool canalDescendente = not planaMU and not planaMD and mMU < 0.0 and mMD < 0.0 and ratioPendMenor <= i_ratioCanal
+                        bool canalLateral = planaMU and planaMD
+                        bool canalMenor = canalAscendente or canalDescendente or canalLateral
+                        bool trianguloMenor = simetrico or ascendente or descendente
+                        bool plantillaMenor = trianguloMenor or canalMenor
+                        bool secuenciaAnclas = canalMenor or iMD >= iMU
+                        int inicioMenorComun = math.max(iMU, iMD)
+                        int largoMenor = bar_index - inicioMenorComun + 1
+                        bool escalaMenor = largoMenor >= 20 and float(largoMenor) <= float(largoMayor) * i_fracMenor
+
+                        if secuenciaAnclas and plantillaMenor and escalaMenor
+                            bool ordenMenor = true
+                            int dentro = 0
+                            int total = 0
+                            int eventosU = 0
+                            int eventosD = 0
+                            int cambios = 0
+                            int ladoPrevio = 0
+                            int ultimoEvento = -1000000
+
+                            for idx = inicioMenorComun to bar_index
+                                int back = bar_index - idx
+                                float uMayor = mayorTieneU ? mayorUY + mayorUM * float(idx - mayorUI) : na
+                                float dMayor = mayorTieneD ? mayorDY + mayorDM * float(idx - mayorDI) : na
+                                float uMenor = yMU + mMU * float(idx - iMU)
+                                float dMenor = yMD + mMD * float(idx - iMD)
+                                if uMenor <= dMenor or dMenor <= 0.0
+                                    ordenMenor := false
+
+                                float margenJer = math.max(nz(atr14[back], 0.0) * 0.35, math.abs(close[back]) * 0.0015)
+                                bool ordenMayor = not mayorEsRecinto or uMayor > dMayor
+                                bool bajoTechoMayor = not mayorTieneU or uMenor <= uMayor + margenJer
+                                bool sobrePisoMayor = not mayorTieneD or dMenor >= dMayor - margenJer
+                                bool contenida = ordenMayor and uMenor > dMenor and bajoTechoMayor and sobrePisoMayor
+                                if contenida
+                                    dentro += 1
+                                total += 1
+
+                                float valorMU = f_valor_hist(back, fuenteMU)
+                                float valorMD = f_valor_hist(back, fuenteMD)
+                                float distU = uMenor != 0.0 ? math.abs((valorMU - uMenor) / uMenor) : 1e10
+                                float distD = dMenor != 0.0 ? math.abs((valorMD - dMenor) / dMenor) : 1e10
+                                bool cercaU = distU <= tol
+                                bool cercaD = distD <= tol
+                                int lado = cercaU and (not cercaD or distU <= distD) ? 1 : cercaD ? -1 : 0
+                                if lado != 0
+                                    bool nuevo = lado != ladoPrevio or idx - ultimoEvento > i_lb
+                                    if nuevo
+                                        if lado == 1
+                                            eventosU += 1
+                                        else
+                                            eventosD += 1
+                                        if ladoPrevio != 0 and lado != ladoPrevio
+                                            cambios += 1
+                                        ladoPrevio := lado
+                                    ultimoEvento := idx
+
+                            float contencion = total > 0 ? float(dentro) / float(total) : 0.0
+                            bool secuenciaTriangulo = eventosU >= 2 and eventosD >= 2 and cambios >= 2
+                            bool secuenciaCanal = eventosU >= 1 and eventosD >= 1 and eventosU + eventosD >= i_minRebTotal and cambios >= 1
+                            bool secuenciaValida = trianguloMenor ? secuenciaTriangulo : secuenciaCanal
+                            bool anidada = ordenMenor and secuenciaValida and contencion >= 0.80
+                            if anidada
+                                menorPares += 1
+                                float balance = 1.0
+                                if simetrico or canalMenor
+                                    float ratioBalance = math.max(math.abs(mMU), syminfo.mintick) / math.max(math.abs(mMD), syminfo.mintick)
+                                    balance := math.exp(-0.35 * math.abs(math.log(ratioBalance)))
+                                // La contencion demuestra jerarquia, pero una
+                                // vez superado el 80% no premia que la figura
+                                // se pegue artificialmente a la pared mayor.
+                                int rotCandMU = f_ruptura_hist(iMU, yMU, mMU, true, inicioMenorComun + i_lb)
+                                int rotCandMD = f_ruptura_hist(iMD, yMD, mMD, false, inicioMenorComun + i_lb)
+                                int rotCandMenor = na(rotCandMU) ? rotCandMD : na(rotCandMD) ? rotCandMU : math.min(rotCandMU, rotCandMD)
+                                int barrasDesdeRotMenor = na(rotCandMenor) ? 0 : math.max(bar_index - rotCandMenor, 0)
+                                float persistenciaMenor = math.exp(-i_decaeHist * float(barrasDesdeRotMenor))
+                                float puntajeMenor = math.sqrt(array.get(mUF, a) * array.get(mDF, b)) * balance * persistenciaMenor
+                                if puntajeMenor > mejorMenor
+                                    mejorMenor := puntajeMenor
+                                    menorUI := iMU
+                                    menorUY := yMU
+                                    menorUM := mMU
+                                    menorDI := iMD
+                                    menorDY := yMD
+                                    menorDM := mMD
+                                    menorRotura := rotCandMenor
+                                    menorTipo := simetrico ? "Triangulo simetrico menor" : ascendente ? "Triangulo ascendente menor" : descendente ? "Triangulo descendente menor" : canalAscendente ? "Canal ascendente menor" : canalDescendente ? "Canal descendente menor" : "Canal lateral menor"
+                                    menorContencion := contencion
+                                    menorEventosU := eventosU
+                                    menorEventosD := eventosD
+
+            // ═══ PARED MENOR UNILATERAL SUPERIOR ═══
+            // Es el espejo estructural del piso ya aprobado. Un desplazamiento
+            // alcista excepcional congela la resistencia que existia antes del
+            // escape; la ruptura cambia su estado, nunca vuelve a inclinarla.
+            array<int> finesTecho = array.new_int()
+            int primerFinTecho = primerMenor + 19
+            if primerFinTecho < bar_index
+                for idx = primerFinTecho + 1 to bar_index
+                    int back = bar_index - idx
+                    float atrPrevio = nz(atr14[back + 1], 0.0)
+                    float desplazamientoAlcista = close[back] - close[back + 1]
+                    if atrPrevio > 0.0 and desplazamientoAlcista > atrPrevio * i_congelaMenorATR
+                        array.push(finesTecho, idx - 1)
+                        if array.size(finesTecho) > i_maxReg
+                            array.shift(finesTecho)
+
+            bool agregarHoyTecho = array.size(finesTecho) == 0
+            if array.size(finesTecho) > 0
+                agregarHoyTecho := array.get(finesTecho, array.size(finesTecho) - 1) != bar_index
+            if agregarHoyTecho
+                array.push(finesTecho, bar_index)
+
+            if array.size(hI) > 0 and array.size(finesTecho) > 0
+                for q = 0 to array.size(hI) - 1
+                    int iPT = array.get(hI, q)
+                    int edadPT = bar_index - iPT + 1
+                    if iPT >= primerMenor and edadPT >= 20 and edadPT <= maxLargoMenor
+                        int backPT = bar_index - iPT
+                        float zonaPT = f_valor_hist(backPT, 5)
+                        for e = 0 to array.size(finesTecho) - 1
+                            int finPT = array.get(finesTecho, e)
+                            if finPT >= iPT + 19
+                                [cPT, mPT, perdidaPT] = f_ajustar_hist(iPT, finPT, 5, i_qTriTecho)
+                                float pendPctPT = not na(mPT) and close != 0.0 ? -mPT / math.abs(close) * 100.0 : 0.0
+                                float distanciaPT = not na(cPT) and zonaPT != 0.0 ? math.abs((cPT - zonaPT) / zonaPT) : 1e10
+                                if not na(cPT) and not na(mPT) and mPT < 0.0 and pendPctPT >= i_pendMenorMin and distanciaPT <= tol
+                                    [fPT, contactosPT, violPT, profPT] = f_pared_hist(iPT, cPT, mPT, true, 5, finPT, perdidaPT)
+                                    if fPT > 0.0 and contactosPT >= 2
+                                        int dentroPT = 0
+                                        int totalPT = 0
+                                        for idx = iPT to finPT
+                                            int back = bar_index - idx
+                                            float uMayor = mayorTieneU ? mayorUY + mayorUM * float(idx - mayorUI) : na
+                                            float dMayor = mayorTieneD ? mayorDY + mayorDM * float(idx - mayorDI) : na
+                                            float uMenor = cPT + mPT * float(idx - iPT)
+                                            float margenJer = math.max(nz(atr14[back], 0.0) * 0.35, math.abs(close[back]) * 0.0015)
+                                            bool ordenMayor = not mayorEsRecinto or uMayor > dMayor
+                                            bool bajoTechoMayor = not mayorTieneU or uMenor <= uMayor + margenJer
+                                            bool sobrePisoMayor = not mayorTieneD or uMenor >= dMayor - margenJer
+                                            if ordenMayor and bajoTechoMayor and sobrePisoMayor
+                                                dentroPT += 1
+                                            totalPT += 1
+
+                                        float contencionPT = totalPT > 0 ? float(dentroPT) / float(totalPT) : 0.0
+                                        float techoHoyPT = cPT + mPT * float(bar_index - iPT)
+                                        float uMayorHoy = mayorTieneU ? mayorUY + mayorUM * float(bar_index - mayorUI) : na
+                                        float dMayorHoy = mayorTieneD ? mayorDY + mayorDM * float(bar_index - mayorDI) : na
+                                        float margenHoy = math.max(nz(atr14, 0.0) * 0.35, math.abs(close) * 0.0015)
+                                        bool ordenMayorHoy = not mayorEsRecinto or uMayorHoy > dMayorHoy
+                                        bool bajoTechoMayorHoy = not mayorTieneU or techoHoyPT <= uMayorHoy + margenHoy
+                                        bool sobrePisoMayorHoy = not mayorTieneD or techoHoyPT >= dMayorHoy - margenHoy
+                                        bool jerarquiaHoy = ordenMayorHoy and bajoTechoMayorHoy and sobrePisoMayorHoy
+                                        if contencionPT >= 0.80 and jerarquiaHoy
+                                            menorTechos += 1
+                                            int rotPT = f_ruptura_hist(iPT, cPT, mPT, true, finPT + 1)
+                                            int barrasDesdeRotura = na(rotPT) ? 0 : math.max(bar_index - rotPT, 0)
+                                            float persistenciaPT = math.exp(-i_decaeHist * float(barrasDesdeRotura))
+                                            float puntajePT = fPT * persistenciaPT
+                                            if puntajePT > mejorTechoMenor
+                                                mejorTechoMenor := puntajePT
+                                                techoMenorI := iPT
+                                                techoMenorY := cPT
+                                                techoMenorM := mPT
+                                                techoMenorFinForm := finPT
+                                                techoMenorRotura := rotPT
+                                                techoMenorContencion := contencionPT
+                                                techoMenorContactos := contactosPT
+
+            // Una estructura menor no siempre llega acompañada de otra pared.
+            // Para conservar un piso que ya existia antes de una ruptura fuerte,
+            // se prueban cierres de formacion definidos por el propio precio: la
+            // vela anterior a cada desplazamiento bajista excepcional. Tambien
+            // compite el ajuste hasta hoy. Ningun simbolo, fecha o precio forma
+            // parte de esta decision.
+            array<int> finesPiso = array.new_int()
+            int primerFinPiso = primerMenor + 19
+            if primerFinPiso < bar_index
+                for idx = primerFinPiso + 1 to bar_index
+                    int back = bar_index - idx
+                    float atrPrevio = nz(atr14[back + 1], 0.0)
+                    float desplazamientoBajista = close[back + 1] - close[back]
+                    if atrPrevio > 0.0 and desplazamientoBajista > atrPrevio * i_congelaMenorATR
+                        array.push(finesPiso, idx - 1)
+                        if array.size(finesPiso) > i_maxReg
+                            array.shift(finesPiso)
+
+            bool agregarHoyPiso = array.size(finesPiso) == 0
+            if array.size(finesPiso) > 0
+                agregarHoyPiso := array.get(finesPiso, array.size(finesPiso) - 1) != bar_index
+            if agregarHoyPiso
+                array.push(finesPiso, bar_index)
+
+            // Cada pivote bajo local compite con todos los finales estructurales
+            // disponibles. La pendiente y la altura se aprenden por el mismo
+            // ajuste cuantílico usado por las demas paredes. La linea debe nacer
+            // cerca de su pivote, tener al menos dos contactos y permanecer
+            // dentro del recinto mayor durante su etapa de formacion.
+            if array.size(lI) > 0 and array.size(finesPiso) > 0
+                for q = 0 to array.size(lI) - 1
+                    int iPF = array.get(lI, q)
+                    int edadPF = bar_index - iPF + 1
+                    if iPF >= primerMenor and edadPF >= 20 and edadPF <= maxLargoMenor
+                        int backPF = bar_index - iPF
+                        float zonaPF = f_valor_hist(backPF, 6)
+                        for e = 0 to array.size(finesPiso) - 1
+                            int finPF = array.get(finesPiso, e)
+                            if finPF >= iPF + 19
+                                [cPF, mPF, perdidaPF] = f_ajustar_hist(iPF, finPF, 6, i_qTriPiso)
+                                float pendPctPF = not na(mPF) and close != 0.0 ? mPF / math.abs(close) * 100.0 : 0.0
+                                float distanciaPF = not na(cPF) and zonaPF != 0.0 ? math.abs((cPF - zonaPF) / zonaPF) : 1e10
+                                if not na(cPF) and not na(mPF) and mPF > 0.0 and pendPctPF >= i_pendMenorMin and distanciaPF <= tol
+                                    [fPF, contactosPF, violPF, profPF] = f_pared_hist(iPF, cPF, mPF, false, 6, finPF, perdidaPF)
+                                    if fPF > 0.0 and contactosPF >= 2
+                                        int dentroPF = 0
+                                        int totalPF = 0
+                                        for idx = iPF to finPF
+                                            int back = bar_index - idx
+                                            float uMayor = mayorTieneU ? mayorUY + mayorUM * float(idx - mayorUI) : na
+                                            float dMayor = mayorTieneD ? mayorDY + mayorDM * float(idx - mayorDI) : na
+                                            float dMenor = cPF + mPF * float(idx - iPF)
+                                            float margenJer = math.max(nz(atr14[back], 0.0) * 0.35, math.abs(close[back]) * 0.0015)
+                                            bool ordenMayor = not mayorEsRecinto or uMayor > dMayor
+                                            bool bajoTechoMayor = not mayorTieneU or dMenor <= uMayor + margenJer
+                                            bool sobrePisoMayor = not mayorTieneD or dMenor >= dMayor - margenJer
+                                            bool contenida = ordenMayor and bajoTechoMayor and sobrePisoMayor
+                                            if contenida
+                                                dentroPF += 1
+                                            totalPF += 1
+
+                                        float contencionPF = totalPF > 0 ? float(dentroPF) / float(totalPF) : 0.0
+                                        float pisoHoyPF = cPF + mPF * float(bar_index - iPF)
+                                        float uMayorHoy = mayorTieneU ? mayorUY + mayorUM * float(bar_index - mayorUI) : na
+                                        float dMayorHoy = mayorTieneD ? mayorDY + mayorDM * float(bar_index - mayorDI) : na
+                                        float margenHoy = math.max(nz(atr14, 0.0) * 0.35, math.abs(close) * 0.0015)
+                                        bool ordenMayorHoy = not mayorEsRecinto or uMayorHoy > dMayorHoy
+                                        bool bajoTechoMayorHoy = not mayorTieneU or pisoHoyPF <= uMayorHoy + margenHoy
+                                        bool sobrePisoMayorHoy = not mayorTieneD or pisoHoyPF >= dMayorHoy - margenHoy
+                                        bool jerarquiaHoy = ordenMayorHoy and bajoTechoMayorHoy and sobrePisoMayorHoy
+                                        if contencionPF >= 0.80 and jerarquiaHoy
+                                            menorPisos += 1
+                                            int rotPF = f_ruptura_hist(iPF, cPF, mPF, false, finPF + 1)
+                                            int barrasDesdeRotura = na(rotPF) ? 0 : math.max(bar_index - rotPF, 0)
+                                            float persistenciaPF = math.exp(-i_decaeHist * float(barrasDesdeRotura))
+                                            float puntajePF = fPF * persistenciaPF
+                                            if puntajePF > mejorPisoMenor
+                                                mejorPisoMenor := puntajePF
+                                                pisoMenorI := iPF
+                                                pisoMenorY := cPF
+                                                pisoMenorM := mPF
+                                                pisoMenorFinForm := finPF
+                                                pisoMenorRotura := rotPF
+                                                pisoMenorContencion := contencionPF
+                                                pisoMenorContactos := contactosPF
+
+        // ═══ DIBUJO Y PANEL ═══
+        if triMasExterior
+            int iU = array.get(tUI, selTU)
+            float yU = array.get(tUY, selTU)
+            float mU = array.get(tUM, selTU)
+            int iD = array.get(tDI, selTD)
+            float yD = array.get(tDY, selTD)
+            float mD = array.get(tDM, selTD)
+            int fin = bar_index + i_proy
+            float yFinU = yU + mU * float(fin - iU)
+            float yFinD = yD + mD * float(fin - iD)
+            line lu = line.new(iU, yU, fin, yFinU, xloc = xloc.bar_index, extend = extend.none, color = i_cTecho, width = i_grosor)
+            x_may_ancla1 := float(iU)
+            x_may_precio1 := yU
+            x_may_pend1 := mU
+            line ld = line.new(iD, yD, fin, yFinD, xloc = xloc.bar_index, extend = extend.none, color = i_cPiso, width = i_grosor)
+            x_may_ancla2 := float(iD)
+            x_may_precio2 := yD
+            x_may_pend2 := mD
+            array.push(lineas, lu)
+            array.push(lineas, ld)
+
+            if i_panel
+                float uHoy = yU + mU * float(bar_index - iU)
+                float dHoy = yD + mD * float(bar_index - iD)
+                string fechaU = str.format_time(time[bar_index - iU], "yyyy-MM-dd")
+                string fechaD = str.format_time(time[bar_index - iD], "yyyy-MM-dd")
+                int rotU = array.get(tURot, selTU)
+                int rotD = array.get(tDRot, selTD)
+                string estado = na(triRotura) ? "En formacion" : not na(rotU) and triRotura == rotU ? "Rota al alza" : "Rota a la baja"
+                table.cell(pan, 0, 0, "ESTRUCTURA MAYOR", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+                table.cell(pan, 1, 0, triTipo + " · " + estado, text_color = na(triRotura) ? color.lime : color.orange, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+                table.cell(pan, 0, 1, "Banco U-D / puntaje", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 1, str.tostring(array.size(tUI)) + "-" + str.tostring(array.size(tDI)) + " · " + str.tostring(mejorTri, "#.0"), text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 2, "Morada aprendida", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 2, fechaU + " · " + str.tostring(yU, "#.##"), text_color = i_cTecho, text_size = size.tiny)
+                table.cell(pan, 0, 3, "Morada hoy / pend", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 3, str.tostring(uHoy, "#.##") + " · " + str.tostring(mU, "#.####"), text_color = i_cTecho, text_size = size.tiny)
+                table.cell(pan, 0, 4, "Azul aprendida", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 4, fechaD + " · " + str.tostring(yD, "#.##"), text_color = i_cPiso, text_size = size.tiny)
+                table.cell(pan, 0, 5, "Azul hoy / pend", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 5, str.tostring(dHoy, "#.##") + " · " + str.tostring(mD, "#.####"), text_color = i_cPiso, text_size = size.tiny)
+                table.cell(pan, 0, 6, "Contactos mor/azu", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 6, str.tostring(array.get(tUC, selTU)) + " / " + str.tostring(array.get(tDC, selTD)), text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 7, "Formacion fuera C/M", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 7, str.tostring(triFueraC) + " / " + str.tostring(triFueraW), text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 8, "Fin form. / apex", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 8, str.tostring(bar_index - triFinForm) + " atras · " + str.tostring(int(math.round(triApex - float(bar_index)))) + " velas", text_color = color.orange, text_size = size.tiny)
+        else if selU >= 0 and selD >= 0 and canalCoherente
+            int iU = array.get(uI, selU)
+            float yU = array.get(uY, selU)
+            float mU = array.get(uM, selU)
+            int iD = array.get(dI, selD)
+            float yD = array.get(dY, selD)
+            float mD = array.get(dM, selD)
+            int fin = bar_index + i_proy
+            float yFinU = yU + mU * float(fin - iU)
+            float yFinD = yD + mD * float(fin - iD)
+            float pendNormU = close != 0.0 ? mU / math.abs(close) * 100.0 : 0.0
+            float pendNormD = close != 0.0 ? mD / math.abs(close) * 100.0 : 0.0
+            string tipoFigura = math.abs(pendNormU) < 0.02 and math.abs(pendNormD) < 0.02 ? "Lateral exterior" : pendNormU >= 0.0 and pendNormD >= 0.0 ? "Ascendente exterior" : "Descendente exterior"
+            line lu = line.new(iU, yU, fin, yFinU, xloc = xloc.bar_index, extend = extend.none, color = i_cTecho, width = i_grosor)
+            x_may_ancla1 := float(iU)
+            x_may_precio1 := yU
+            x_may_pend1 := mU
+            line ld = line.new(iD, yD, fin, yFinD, xloc = xloc.bar_index, extend = extend.none, color = i_cPiso, width = i_grosor)
+            x_may_ancla2 := float(iD)
+            x_may_precio2 := yD
+            x_may_pend2 := mD
+            array.push(lineas, lu)
+            array.push(lineas, ld)
+
+            if i_panel
+                float uHoy = yU + mU * float(bar_index - iU)
+                float dHoy = yD + mD * float(bar_index - iD)
+                string fechaU = str.format_time(time[bar_index - iU], "yyyy-MM-dd")
+                string fechaD = str.format_time(time[bar_index - iD], "yyyy-MM-dd")
+                table.cell(pan, 0, 0, "ESTRUCTURA MAYOR", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+                table.cell(pan, 1, 0, tipoFigura, text_color = color.lime, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+                table.cell(pan, 0, 1, "Regimenes / parejas", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 1, str.tostring(array.size(regimenes)) + " / " + str.tostring(parejasValidas), text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 2, "Morada inicio", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 2, fechaU + " · " + str.tostring(yU, "#.##"), text_color = i_cTecho, text_size = size.tiny)
+                table.cell(pan, 0, 3, "Morada hoy / pend", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 3, str.tostring(uHoy, "#.##") + " · " + str.tostring(mU, "#.####"), text_color = i_cTecho, text_size = size.tiny)
+                table.cell(pan, 0, 4, "Azul inicio", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 4, fechaD + " · " + str.tostring(yD, "#.##"), text_color = i_cPiso, text_size = size.tiny)
+                table.cell(pan, 0, 5, "Azul hoy / pend", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 5, str.tostring(dHoy, "#.##") + " · " + str.tostring(mD, "#.####"), text_color = i_cPiso, text_size = size.tiny)
+                table.cell(pan, 0, 6, "Rebotes mor/azu", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 6, str.tostring(array.get(uR, selU)) + " / " + str.tostring(array.get(dR, selD)), text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 7, "Fuera cierres/mechas", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 7, str.tostring(diagCierres) + " / " + str.tostring(diagMechas), text_color = diagCierres <= 6 ? color.lime : color.orange, text_size = size.tiny)
+                table.cell(pan, 0, 8, "Ancho / posicion", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 8, str.tostring(diagAncho, "#.#") + "% · " + str.tostring(diagPos, "#") + "%", text_color = color.lime, text_size = size.tiny)
+        else if indUI >= 0 or indDI >= 0
+            int fin = bar_index + i_proy
+            if indUI >= 0
+                float yFinU = indUY + indUM * float(fin - indUI)
+                line lu = line.new(indUI, indUY, fin, yFinU, xloc = xloc.bar_index, extend = extend.none, color = i_cTecho, width = i_grosor)
+                x_may_ancla1 := float(indUI)
+                x_may_precio1 := indUY
+                x_may_pend1 := indUM
+                array.push(lineas, lu)
+            if indDI >= 0
+                float yFinD = indDY + indDM * float(fin - indDI)
+                line ld = line.new(indDI, indDY, fin, yFinD, xloc = xloc.bar_index, extend = extend.none, color = i_cPiso, width = i_grosor)
+                x_may_ancla2 := float(indDI)
+                x_may_precio2 := indDY
+                x_may_pend2 := indDM
+                array.push(lineas, ld)
+
+            if i_panel
+                string tipoInd = indUI >= 0 and indDI >= 0 ? "Mayores independientes" : indUI >= 0 ? "Resistencia mayor unilateral" : "Soporte mayor unilateral"
+                string fechaU = indUI >= 0 ? str.format_time(time[bar_index - indUI], "yyyy-MM-dd") : "—"
+                string fechaD = indDI >= 0 ? str.format_time(time[bar_index - indDI], "yyyy-MM-dd") : "—"
+                float uHoy = indUI >= 0 ? indUY + indUM * float(bar_index - indUI) : na
+                float dHoy = indDI >= 0 ? indDY + indDM * float(bar_index - indDI) : na
+                string valorU = indUI >= 0 ? fechaU + " · " + str.tostring(indUY, "#.##") : "—"
+                string valorD = indDI >= 0 ? fechaD + " · " + str.tostring(indDY, "#.##") : "—"
+                string hoyU = indUI >= 0 ? str.tostring(uHoy, "#.##") + " · " + str.tostring(indUM, "#.####") : "—"
+                string hoyD = indDI >= 0 ? str.tostring(dHoy, "#.##") + " · " + str.tostring(indDM, "#.####") : "—"
+                string formaU = indUI >= 0 ? str.tostring(indUFin - indUI + 1) : "—"
+                string formaD = indDI >= 0 ? str.tostring(indDFin - indDI + 1) : "—"
+                table.cell(pan, 0, 0, "ESTRUCTURA MAYOR", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+                table.cell(pan, 1, 0, tipoInd, text_color = color.orange, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+                table.cell(pan, 0, 1, "Hipotesis descartada", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 1, selU >= 0 and selD >= 0 ? "Canal · ratio " + str.tostring(ratioCanal, "#.##") : "Sin canal mayor", text_color = color.orange, text_size = size.tiny)
+                table.cell(pan, 0, 2, "Morada unilateral", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 2, valorU, text_color = i_cTecho, text_size = size.tiny)
+                table.cell(pan, 0, 3, "Morada hoy / pend", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 3, hoyU, text_color = i_cTecho, text_size = size.tiny)
+                table.cell(pan, 0, 4, "Azul unilateral", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 4, valorD, text_color = i_cPiso, text_size = size.tiny)
+                table.cell(pan, 0, 5, "Azul hoy / pend", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 5, hoyD, text_color = i_cPiso, text_size = size.tiny)
+                table.cell(pan, 0, 6, "Contactos mor/azu", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 6, str.tostring(indUC) + " / " + str.tostring(indDC), text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 7, "Formacion mor/azu", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 7, formaU + " / " + formaD + " velas", text_color = color.white, text_size = size.tiny)
+                table.cell(pan, 0, 8, "Motor menor", text_color = color.silver, text_size = size.tiny)
+                table.cell(pan, 1, 8, "Jerarquia unilateral", text_color = color.lime, text_size = size.tiny)
+        else if i_panel
+            table.cell(pan, 0, 0, "ESTRUCTURA MAYOR", text_color = color.white, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+            table.cell(pan, 1, 0, "Sin estructura mayor", text_color = color.orange, bgcolor = color.new(color.gray, 30), text_size = size.tiny)
+            table.cell(pan, 0, 1, "Reg / canal / triangulo", text_color = color.silver, text_size = size.tiny)
+            table.cell(pan, 1, 1, str.tostring(array.size(regimenes)) + " / " + str.tostring(array.size(uI)) + "-" + str.tostring(array.size(dI)) + " / " + str.tostring(array.size(tUI)) + "-" + str.tostring(array.size(tDI)), text_color = array.size(regimenes) > 0 ? color.white : color.red, text_size = size.tiny)
+
+        // ═══════════════════════════════════════════════════════════════════
+        // La capa MENOR vive en el indicador "Estructura Menor".
+        // Aca se calcula igual (el motor menor sigue arriba, intacto) pero no
+        // se dibuja ni se reporta: este indicador solo muestra la mayor.
+        // Para volver a unirlos, se pega de nuevo este bloque desde el otro.
+        // ═══════════════════════════════════════════════════════════════════
+
+// ═══ COLUMNAS PARA EL CSV ═══
+// Invisibles en el grafico. Solo aparecen al exportar los datos.
+plot(x_may_ancla1,  "Mayor ancla 1",  display = display.data_window)
+plot(x_may_precio1, "Mayor precio 1", display = display.data_window)
+plot(x_may_pend1,   "Mayor pend 1",   display = display.data_window)
+plot(x_may_ancla2,  "Mayor ancla 2",  display = display.data_window)
+plot(x_may_precio2, "Mayor precio 2", display = display.data_window)
+plot(x_may_pend2,   "Mayor pend 2",   display = display.data_window)
