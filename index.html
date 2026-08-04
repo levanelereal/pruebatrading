@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trazador y medidor</title>
+<title>Motor Finviz original</title>
 <style>
 :root{
   --fondo:#0d1117;--panel:#151b23;--borde:#232c37;
@@ -51,88 +51,94 @@ select{background:var(--fondo);color:var(--tinta);border:1px solid var(--borde);
 summary{cursor:pointer;font-size:10px;color:var(--gris);margin-top:8px}
 .par{display:grid;grid-template-columns:auto 1fr auto;gap:6px 9px;align-items:center;font-size:11px}
 .par label{color:var(--gris)}
-.par > span{color:var(--ambar);font-weight:600;min-width:56px;text-align:right}
-.par input[type=range]{width:100%;accent-color:var(--ambar)}
+  .par > span{color:var(--ambar);font-weight:600;min-width:56px;text-align:right}
+  .par input[type=range]{width:100%;accent-color:var(--ambar)}
+  .labgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:8px}
+  .labgrid label{display:flex;flex-direction:column;gap:3px;color:var(--gris);font-size:9px;text-transform:uppercase}
+  .labgrid input{width:100%;background:var(--fondo);color:var(--tinta);border:1px solid var(--borde);
+    border-radius:4px;padding:5px;font:11px var(--m)}
+  .tabla-lab{width:100%;border-collapse:collapse;margin-top:8px;font-size:9px}
+  .tabla-lab th,.tabla-lab td{border-bottom:1px solid var(--borde);padding:4px 3px;text-align:right;vertical-align:top}
+  .tabla-lab th:first-child,.tabla-lab td:first-child{text-align:left}
+  .tabla-lab th{color:var(--gris);font-weight:400}
+  .ok{color:var(--alza)}.cerca{color:var(--ambar)}.lejos{color:var(--baja)}
+  .insignia{display:inline-block;border:1px solid var(--borde);border-radius:9px;padding:1px 5px;font-size:9px;color:var(--tenue)}
+  .capas{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;color:var(--tenue);font-size:9px}
+  .capas label{display:flex;gap:4px;align-items:center}.capas input{accent-color:var(--ambar)}
+  @media(max-width:800px){.der{width:100%}.labgrid{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
 
-<h1>Trazador y medidor</h1>
+<h1>Motor Finviz original</h1>
 <div id="cab" style="display:none;margin:6px 0 10px;padding:8px 12px;background:var(--panel);
   border:1px solid var(--borde);border-left:3px solid var(--ambar);border-radius:5px">
   <span id="cticker" style="font-size:17px;font-weight:600;letter-spacing:.04em"></span>
   <span id="ctf" style="margin-left:10px;color:var(--ambar);font-weight:600"></span>
   <span id="crango" style="margin-left:12px;color:var(--gris);font-size:11px"></span>
 </div>
-<p class="sub">Arrastrá los extremos para ajustar. Rueda para zoom, arrastre en el fondo para mover.</p>
+<p class="sub">Rueda para zoom y arrastra el fondo para mover. Solo se dibujan las líneas del motor original.</p>
 
 <div class="fila">
  <div class="izq">
   <div class="caja">
    <div class="rot">1 · Datos</div>
    <div id="zona">
-     <input type="file" id="archivo" accept=".csv,text/csv" style="display:none">
-     <button id="elegir">Elegir CSV</button>
-     <span class="lec" style="margin-left:8px">o arrastralo acá</span>
+     <input type="file" id="archivo" accept=".csv,text/csv" multiple style="display:none">
+     <button id="elegir">Elegir CSV(s)</button>
+     <span class="lec" style="margin-left:8px">uno o varios · también podés arrastrarlos</span>
    </div>
    <details><summary>…o pegar a mano</summary>
      <textarea id="csv" style="height:80px;margin-top:7px"></textarea>
      <div class="btns"><button id="cargar">Cargar</button></div>
    </details>
-   <div class="lec" id="info"></div>
-  </div>
+    <div class="lec" id="info"></div>
+    <div class="btns">
+      <select id="selectorLote" style="display:none"></select>
+      <label class="lec" style="display:flex;gap:5px;align-items:center"><input id="recordar" type="checkbox" checked> recordar sesión en este navegador</label>
+      <button id="borrarMemoria">Borrar memoria</button>
+    </div>
+   </div>
 
   <div class="caja" style="margin-top:12px">
    <canvas id="lz" height="470"></canvas>
    <div class="btns">
-    <button id="autoFinviz" style="background:var(--morada);color:#0d1117;font-weight:600;border-color:var(--morada);">Auto-Trazar Finviz</button>
-    <button id="modo">Trazar</button>
-    <select id="tipo"><option value="mayor">Mayor</option><option value="menor">Menor</option></select>
-    <select id="rol"><option value="auto">Rol auto</option><option value="soporte">Soporte</option><option value="resistencia">Resistencia</option></select>
-    <button id="undo">Borrar última</button>
+     <button id="autoFinviz" style="background:var(--morada);color:#0d1117;font-weight:600;border-color:var(--morada);">Ejecutar motor original</button>
     <button id="todo">Ver todo</button>
     <button id="recientes">Últimas 200</button>
    </div>
    <div class="lec" id="lec">Cargá un CSV para empezar.</div>
   </div>
 
-  <div class="caja" style="margin-top:12px">
-   <div class="rot">Línea calculada · como la haría el indicador</div>
-   <div class="par">
-     <label>cuantil</label><input type="range" id="sq" min="0" max="100" step="0.5" value="8"><span id="vq">8 %</span>
-     <label>ventana</label><input type="range" id="sv" min="30" max="400" step="5" value="200"><span id="vv">200</span>
-     <label>desde</label><input type="range" id="sd" min="0" max="80" step="1" value="0"><span id="vd">inicio</span>
-   </div>
-   <div class="btns">
-     <button id="calc">Calcular</button>
-     <select id="crol"><option value="soporte">Soporte</option><option value="resistencia">Resistencia</option></select>
-     <button id="limpiarCalc">Quitar</button>
-   </div>
-   <div class="lec" id="lcalc"></div>
-  </div>
-
-  <div class="caja" style="margin-top:12px">
-   <div class="rot">Líneas del indicador · pegá el panel</div>
-   <textarea id="imp" style="height:62px" placeholder="Pegá las filas del panel del indicador, tal cual.&#10;&#10;Morada unilateral   2025-10-29 · 756.29&#10;Morada hoy / pend   681.29 · -0.3989&#10;Menor azul          2026-05-12 · 594.04 → 594.04"></textarea>
-   <div class="btns"><button id="importar">Cargar y editar</button>
-     <button id="ejemplo">Poner un ejemplo</button>
-     <span class="lec">acepta el texto del panel tal cual</span></div>
-  </div>
  </div>
 
- <div class="der">
-  <div class="caja">
+  <div class="der">
+   <div class="caja" style="margin-bottom:12px">
+    <div class="rot">Motor original extraído de Prueba 1</div>
+    <div class="labgrid">
+      <label>ventana<span class="insignia">200 velas</span></label>
+      <label>exclusión reciente<span class="insignia">20 velas</span></label>
+      <label>cuantiles<span class="insignia">techo 97 % · piso 8 %</span></label>
+    </div>
+    <div class="capas">
+      <label><input id="verMotor" type="checkbox" checked>Motor original</label>
+      <label><input id="autoEjecutar" type="checkbox" checked>Ejecutar al cambiar</label>
+    </div>
+    <div class="btns">
+      <button id="motorRun">Ejecutar motor original</button>
+      <button id="motorClear">Quitar sus líneas</button>
+      <button id="motorExport" disabled>Exportar resultado</button>
+    </div>
+    <div class="lec" id="motorResumen">Este es el único motor visual: ventana 200, exclusión 20, techo 97 % y piso 8 %.</div>
+    <div id="motorResultados"></div>
+    <textarea id="motorSalida" readonly style="height:160px;margin-top:8px;display:none"></textarea>
+   </div>
+   <div class="caja">
    <div class="rot">Lo medido</div>
    <div id="lista"><p class="vacio">Todavía no hay líneas.</p></div>
    <div class="btns"><button id="exp" disabled>Preparar para copiar</button></div>
    <textarea id="salida" readonly style="height:150px;margin-top:8px;display:none"></textarea>
-   <div class="nota">
-    Las líneas <b>del indicador</b> se dibujan con guion largo. Podés arrastrar sus extremos
-    para corregirlas: la medición se actualiza y te dice qué cuantil produce la versión corregida.
-    <br><br>
-    El <b>cuantil</b> es a qué altura se apoya la línea sobre la zona cuerpo-mecha.
-    En las líneas reales de Finviz los soportes dan cerca de 8 % y las resistencias cerca de 97 %.
-   </div>
+    <div class="nota">Solo aparecen el techo morado y el piso azul calculados por el código original de Prueba 1.</div>
   </div>
  </div>
 </div>
@@ -141,8 +147,11 @@ summary{cursor:pointer;font-size:10px;color:var(--gris);margin-top:8px}
 const $=i=>document.getElementById(i);
 const cv=$('lz'), cx=cv.getContext('2d');
 const PESO=0.35, TOL=0.008, ALTO=470;
-let V=[],L=[],traz=false,pend=null,hov=null,M={};
-let vis={i0:0,i1:0}, sel=-1, arr=null, pan=null;
+let V=[],L=[],M={};
+let MOTOR={techo:null,piso:null};
+let LOTE=[],LOTE_ACTIVO=0;
+const CLAVE_SESION='trazador-finviz-lab-v3';
+let vis={i0:0,i1:0}, sel=-1, pan=null;
 
 /* ───── carga ───── */
 const limpiar=x=>x.replace(/^\uFEFF/,'').replace(/^["']|["']$/g,'').trim();
@@ -168,36 +177,24 @@ function procesar(txt){
   V.push(r);
  }
  if(V.length<20){$('info').innerHTML=`Solo leí <b>${V.length}</b> velas.`;return;}
- L=[];pend=null;sel=-1;
- const ult=f[f.length-1].split(sep).map(limpiar);
- const col=n=>{const i=h.findIndex(x=>x===n); return i>=0?parseFloat(ult[i]):NaN;};
- let cargadas=0;
- [['mayor','mayor'],['menor','menor']].forEach(([pre,tipo])=>{
-  for(const j of [1,2]){
-   const ia=col(`${pre} ancla ${j}`), pa=col(`${pre} precio ${j}`), m=col(`${pre} pend ${j}`);
-   if(!isFinite(ia)||!isFinite(pa)||!isFinite(m)) continue;
-   const i0=Math.max(0,Math.min(V.length-1,Math.round(ia)));
-   const u=V.length-1;
-   if(u-i0<5) continue;
-   const a={i:i0,p:pa,q:'del indicador',f:V[i0].f};
-   const b={i:u,p:pa+m*(u-i0),q:'del indicador',f:V[u].f};
-   L.push(Object.assign({a,b,tipo,delIndicador:true},medir(a,b,'auto')));
-   cargadas++;
-  }
- });
+ L=[];MOTOR={techo:null,piso:null};sel=-1;
  vis={i0:Math.max(0,V.length-200),i1:V.length-1};
  refresh();dib();
  pintarCabecera();
  $('info').innerHTML=`<b>${V.length}</b> velas · ${V[0].f} → ${V[V.length-1].f}`
-   + (cargadas ? ` · <b style="color:var(--alza)">${cargadas} línea(s) del indicador cargadas</b>`
-               : ` · <span style="color:var(--gris)">sin líneas del indicador en este CSV</span>`);
+   + ` · <b style="color:var(--alza)">motor original listo</b>`;
 }
 let TICKER='', TF='';
+function tickerDesdeNombre(nombre){
+ const base=nombre.replace(/\.csv$/i,'');
+ const m=base.match(/^(?:AMEX|NASDAQ|NYSE|COINBASE|BINANCE|CBOE|OTC)[_: -]([A-Z0-9.\-]+)/i)
+       || base.match(/(?:^|_)([A-Z][A-Z0-9.\-]{0,9})(?:,|__|\s|$)/);
+ return m?m[1].toUpperCase():'';
+}
 function detectarNombre(nombre){
  const base=nombre.replace(/\.csv$/i,'');
- const tk=base.match(/(?:^|_)([A-Z][A-Z0-9.\-]{0,9})__/);
  const tf=base.match(/__(\d+[A-Za-z]?|[A-Za-z]+)__?/g);
- TICKER = tk ? tk[1] : '';
+ TICKER = tickerDesdeNombre(nombre);
  if(tf&&tf.length>1) TF=tf[1].replace(/_/g,'');
  else if(tf&&tf.length===1) TF=tf[0].replace(/_/g,'');
 }
@@ -217,15 +214,47 @@ function pintarCabecera(){
  $('cab').style.display='block';
  if(tf!=='1D') $('ctf').innerHTML = tf+' <span style="color:var(--baja)">· ojo: Finviz calcula en diario</span>';
 }
-function leer(file){ if(!file)return; detectarNombre(file.name); $('info').textContent='Leyendo '+file.name+'…';
- const r=new FileReader(); r.onload=()=>procesar(String(r.result)); r.readAsText(file); }
+function pintarSelectorLote(){
+ const s=$('selectorLote');s.innerHTML='';
+ LOTE.forEach((x,i)=>{const o=document.createElement('option'),tk=tickerDesdeNombre(x.name);
+  o.value=String(i);o.textContent=(tk?tk+' · ':'')+x.name;s.appendChild(o);});
+ s.style.display=LOTE.length>1?'inline-block':'none';s.value=String(LOTE_ACTIVO);
+}
+function cargarLote(i){
+ if(!LOTE.length)return;LOTE_ACTIVO=Math.max(0,Math.min(LOTE.length-1,+i||0));
+ const x=LOTE[LOTE_ACTIVO];detectarNombre(x.name);$('info').textContent='Leyendo '+x.name+'…';
+ procesar(x.texto);pintarSelectorLote();guardarSesion();
+ if($('autoEjecutar').checked)ejecutarMotorOriginal();
+}
+async function leerArchivos(lista){
+ const archivos=[...lista].filter(x=>/\.csv$/i.test(x.name));
+ if(!archivos.length)return;
+ $('info').textContent=`Leyendo ${archivos.length} archivo(s)…`;
+ LOTE=await Promise.all(archivos.map(async f=>({name:f.name,texto:await f.text()})));
+ LOTE_ACTIVO=0;cargarLote(0);
+}
+function guardarSesion(){
+ if(!$('recordar').checked)return;
+  try{localStorage.setItem(CLAVE_SESION,JSON.stringify({lote:LOTE,activo:LOTE_ACTIVO}));}
+ catch(e){$('info').textContent+=' · no se pudo guardar la sesión local';}
+}
+function restaurarSesion(){
+ try{
+  const raw=localStorage.getItem(CLAVE_SESION);if(!raw)return;
+  const s=JSON.parse(raw);LOTE=Array.isArray(s.lote)?s.lote:[];
+  if(LOTE.length)cargarLote(Math.max(0,Math.min(LOTE.length-1,+s.activo||0)));
+ }catch(e){localStorage.removeItem(CLAVE_SESION);}
+}
 $('elegir').onclick=()=>$('archivo').click();
-$('archivo').onchange=e=>leer(e.target.files[0]);
-$('cargar').onclick=()=>procesar($('csv').value);
+$('archivo').onchange=e=>leerArchivos(e.target.files);
+$('selectorLote').onchange=e=>cargarLote(e.target.value);
+$('recordar').onchange=()=>{if($('recordar').checked)guardarSesion();else localStorage.removeItem(CLAVE_SESION);};
+$('borrarMemoria').onclick=()=>{localStorage.removeItem(CLAVE_SESION);$('info').textContent+=' · memoria local borrada';};
+$('cargar').onclick=()=>{LOTE=[];procesar($('csv').value);};
 const zn=$('zona');
 ['dragenter','dragover'].forEach(e=>zn.addEventListener(e,v=>{v.preventDefault();zn.classList.add('sobre');}));
 ['dragleave','drop'].forEach(e=>zn.addEventListener(e,v=>{v.preventDefault();zn.classList.remove('sobre');}));
-zn.addEventListener('drop',e=>leer(e.dataTransfer.files[0]));
+zn.addEventListener('drop',e=>leerArchivos(e.dataTransfer.files));
 document.addEventListener('dragover',e=>e.preventDefault());
 document.addEventListener('drop',e=>e.preventDefault());
 
@@ -268,57 +297,73 @@ function calcularPineScript(i0, i1, qPct, esSoporte) {
     return { c: mejC, m: mejM };
 }
 
-$('autoFinviz').onclick = () => {
-    if(!V.length) { $('lec').innerHTML = 'Cargá el CSV primero.'; return; }
-    
-    let u = V.length - 1;
-    let iBase = Math.max(0, u - 200); // Ventana diaria i_vent = 200
-    
-    let maxP = -Infinity, iMax = iBase;
-    let minP = Infinity, iMin = iBase;
-    
-    // Buscar los pivotes estructurales recientes
-    for(let k = iBase; k <= u - 20; k++) {
-        if(V[k].h > maxP) { maxP = V[k].h; iMax = k; }
-        if(V[k].l < minP) { minP = V[k].l; iMin = k; }
-    }
-    
-    // Trazar Techo (Morado) al 97%
-    let techo = calcularPineScript(iMax, u, 97.0, false);
-    if(techo) {
-        let a = { i: iMax, p: techo.c, q: 'ajuste auto 97%', f: V[iMax].f };
-        let b = { i: u, p: techo.c + techo.m * (u - iMax), q: 'ajuste auto 97%', f: V[u].f };
-        L.push(Object.assign({ a, b, tipo: 'mayor', delIndicador: false }, medir(a, b, 'resistencia')));
-    }
-    
-    // Trazar Piso (Azul) al 8%
-    let piso = calcularPineScript(iMin, u, 8.0, true);
-    if(piso) {
-        let a = { i: iMin, p: piso.c, q: 'ajuste auto 8%', f: V[iMin].f };
-        let b = { i: u, p: piso.c + piso.m * (u - iMin), q: 'ajuste auto 8%', f: V[u].f };
-        L.push(Object.assign({ a, b, tipo: 'menor', delIndicador: false }, medir(a, b, 'soporte')));
-    }
-    
-    sel = L.length - 1;
-    refresh(); dib();
-    $('lec').innerHTML = '<b style="color:var(--morada)">✅ Algoritmo Finviz procesado. Resistencias trazadas.</b>';
+function crearLineaMotor(ajuste,i0,rol,tipo,cuantil){
+ if(!ajuste)return null;
+ const u=V.length-1;
+ const a={i:i0,p:ajuste.c,q:`motor original ${cuantil}%`,f:V[i0].f};
+ const b={i:u,p:ajuste.c+ajuste.m*(u-i0),q:`motor original ${cuantil}%`,f:V[u].f};
+ return Object.assign({a,b,tipo,rolPedido:rol,fuente:'motor-original',motorOriginal:true},medir(a,b,rol));
+}
+function renderMotor(){
+ const caja=$('motorResultados'),lineas=[MOTOR.techo,MOTOR.piso].filter(Boolean);
+ if(!lineas.length){caja.innerHTML='';$('motorExport').disabled=true;return;}
+ let html='<table class="tabla-lab"><thead><tr><th>Línea</th><th>ancla</th><th>pendiente</th><th>hoy</th></tr></thead><tbody>';
+ lineas.forEach(t=>{html+=`<tr><td>${t.rol}</td><td>${t.a.f}<br>${t.a.p.toFixed(2)}</td>`
+  +`<td>${t.m>=0?'+':''}${t.m.toFixed(4)}</td><td>${t.hoy.toFixed(2)}</td></tr>`;});
+ html+='</tbody></table>';caja.innerHTML=html;$('motorExport').disabled=false;
+}
+function ejecutarMotorOriginal(){
+ if(!V.length){$('motorResumen').textContent='Cargá primero el CSV diario de TradingView.';return;}
+ if(detectarTF()!=='1D'){$('motorResumen').innerHTML='<span class="lejos">Bloqueado: el motor funciona únicamente en 1D.</span>';return;}
+ if(V.length<40){$('motorResumen').textContent='Se necesitan al menos 40 velas para excluir las 20 recientes.';return;}
+
+ L=[];
+ const u=V.length-1,iBase=Math.max(0,u-200);
+ let maxP=-Infinity,iMax=iBase,minP=Infinity,iMin=iBase;
+ for(let k=iBase;k<=u-20;k++){
+  if(V[k].h>maxP){maxP=V[k].h;iMax=k;}
+  if(V[k].l<minP){minP=V[k].l;iMin=k;}
+ }
+
+ const techo=crearLineaMotor(calcularPineScript(iMax,u,97,false),iMax,'resistencia','mayor',97);
+ const piso=crearLineaMotor(calcularPineScript(iMin,u,8,true),iMin,'soporte','menor',8);
+ if(techo)L.push(techo);if(piso)L.push(piso);
+ MOTOR={techo,piso};sel=-1;refresh();dib();renderMotor();
+ $('motorResumen').innerHTML=`Motor original ejecutado · ventana <b>200</b> · exclusión <b>20</b> · techo <b>97%</b> · piso <b>8%</b>`;
+ $('lec').innerHTML='<b style="color:var(--morada)">Motor original de Prueba 1 procesado.</b>';
+}
+function quitarMotor(){
+ L=[];MOTOR={techo:null,piso:null};sel=-1;refresh();dib();renderMotor();
+ $('motorResumen').textContent='Las dos líneas del motor original fueron retiradas.';
+}
+$('autoFinviz').onclick=ejecutarMotorOriginal;
+$('motorRun').onclick=ejecutarMotorOriginal;
+$('motorClear').onclick=quitarMotor;
+$('motorExport').onclick=()=>{
+ const serializar=t=>t?{rol:t.rol,fecha1:t.a.f,precio1:t.a.p,fecha2:V[V.length-1].f,
+  precio2:t.hoy,pendiente:t.m,largoVelas:t.n,contactos:t.cont.length,violaciones:t.viol,cuantilMedido:t.q}:null;
+ $('motorSalida').value=JSON.stringify({ticker:TICKER,temporalidad:detectarTF(),configuracion:{ventana:200,
+  excluirRecientes:20,qTecho:97,qPiso:8,minLargo:20,spanPendPct:.12,pasosPend:81},
+  techo:serializar(MOTOR.techo),piso:serializar(MOTOR.piso)},null,2);
+ $('motorSalida').style.display='block';$('motorSalida').select();
 };
+$('verMotor').onchange=()=>{if(V.length)dib();};
 
 /* ───── escalas y canvas ───── */
+function lineasVisibles(){return $('verMotor').checked?L:[];}
 function esc(){
  const w=cv.clientWidth,dpr=devicePixelRatio||1;
  cv.width=w*dpr;cv.height=ALTO*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
  const i0=vis.i0,i1=vis.i1;
  let lo=1e18,hi=-1e18;
  for(let i=i0;i<=i1;i++){lo=Math.min(lo,V[i].l);hi=Math.max(hi,V[i].h);}
- L.forEach(t=>{ for(const q of [t.a,t.b]) if(q.i>=i0&&q.i<=i1){lo=Math.min(lo,q.p);hi=Math.max(hi,q.p);} });
+ lineasVisibles().forEach(t=>{ for(const q of [t.a,t.b]) if(q.i>=i0&&q.i<=i1){lo=Math.min(lo,q.p);hi=Math.max(hi,q.p);} });
  const p=(hi-lo)*.07;
  M={x0:58,y0:12,w:w-66,h:ALTO-34,i0,i1,p0:lo-p,p1:hi+p};
 }
 const X=i=>M.x0+(i-M.i0)/Math.max(1,M.i1-M.i0)*M.w;
 const Y=p=>M.y0+(M.p1-p)/(M.p1-M.p0)*M.h;
 const iX=x=>Math.max(0,Math.min(V.length-1,Math.round(M.i0+(x-M.x0)/M.w*(M.i1-M.i0))));
-const pY=y=>M.p1-(y-M.y0)/M.h*(M.p1-M.p0);
 
 function dib(){
  if(!V.length)return; esc();
@@ -338,12 +383,11 @@ function dib(){
  cx.textAlign='center';cx.fillStyle='#4d5560';
  for(let k=0;k<5;k++){const i=Math.round(M.i0+(M.i1-M.i0)*k/4);cx.fillText(V[i].f.slice(2),X(i),ALTO-8);}
  L.forEach((t,k)=>{
+  if(t.motorOriginal&&!$('verMotor').checked)return;
   const c=t.tipo==='mayor'?'#c77dff':'#4cc9f0';
   cx.strokeStyle=c;cx.lineWidth=k===sel?3:(t.tipo==='mayor'?2:1.5);
-  if(t.delIndicador) cx.setLineDash([10,5]); else cx.setLineDash([]);
   const u=V.length-1;
   cx.beginPath();cx.moveTo(X(t.a.i),Y(t.a.p));cx.lineTo(X(u),Y(t.hoy));cx.stroke();
-  cx.setLineDash([]);
   cx.fillStyle=c; cx.globalAlpha=.8;
   t.cont.forEach(j=>{if(j<M.i0||j>M.i1)return;const lv=t.a.p+t.m*(j-t.a.i);
    cx.beginPath();cx.arc(X(j),Y(lv),2,0,7);cx.fill();});
@@ -353,29 +397,6 @@ function dib(){
    if(k===sel){cx.strokeStyle='#fff';cx.lineWidth=1.5;cx.stroke();}
   });
  });
- if(calc){
-  cx.strokeStyle='#ffb703';cx.lineWidth=2;cx.setLineDash([7,4]);
-  cx.beginPath();cx.moveTo(X(calc.a.i),Y(calc.a.p));cx.lineTo(X(V.length-1),Y(calc.hoy));cx.stroke();
-  cx.setLineDash([]);cx.fillStyle='#ffb703';cx.globalAlpha=.9;
-  calc.cont.forEach(function(j){ if(j<M.i0||j>M.i1)return;
-   const lv=calc.a.p+calc.m*(j-calc.a.i);
-   cx.beginPath();cx.arc(X(j),Y(lv),2.5,0,7);cx.fill();});
-  cx.globalAlpha=1;
- }
- if(pend&&hov){
-  cx.strokeStyle='#ffb703';cx.lineWidth=1.5;cx.setLineDash([4,4]);
-  cx.beginPath();cx.moveTo(X(pend.i),Y(pend.p));cx.lineTo(X(hov.i),Y(hov.p));cx.stroke();
-  cx.setLineDash([]);cx.fillStyle='#ffb703';
-  cx.beginPath();cx.arc(X(pend.i),Y(pend.p),4,0,7);cx.fill();
- }
-}
-
-function pegar(i,p){
- const v=V[i];
- const ops=[['máximo',v.h],['mínimo',v.l],['apertura',v.o],['cierre',v.c],['cuerpo alto',v.cs],['cuerpo bajo',v.ci]];
- let b=ops[0],d=Math.abs(p-ops[0][1]);
- ops.forEach(o=>{const dd=Math.abs(p-o[1]);if(dd<d){d=dd;b=o;}});
- return {i,p:b[1],q:b[0],f:v.f};
 }
 
 function medir(a,b,rolPedido){
@@ -399,51 +420,26 @@ function medir(a,b,rolPedido){
          q:res.length>1?pos/(res.length-1)*100:0, pend:m/V[u].c*100,
          rolPedido};
 }
-const remedir=t=>Object.assign(t,medir(t.a,t.b,t.rolPedido||'auto'));
 
 /* ───── interacción ───── */
 const pos=e=>{const r=cv.getBoundingClientRect();const c=e.touches?e.touches[0]:e;
  return{x:c.clientX-r.left,y:c.clientY-r.top};};
 
-function agarrar(x,y){
- for(let k=L.length-1;k>=0;k--){
-  for(const w of ['a','b']){
-   const q=L[k][w];
-   if(Math.hypot(X(q.i)-x,Y(q.p)-y)<9) return {k,w};
-  }
- }
- return null;
-}
-
 cv.addEventListener('mousedown',e=>{
  if(!V.length)return;
- const{x,y}=pos(e);
- if(!traz){
-  const g=agarrar(x,y);
-  if(g){arr=g;sel=g.k;refresh();return;}
-  pan={x,i0:vis.i0,i1:vis.i1};
- }
+ const{x}=pos(e);
+ pan={x,i0:vis.i0,i1:vis.i1};
 });
-addEventListener('mouseup',()=>{arr=null;pan=null;});
+addEventListener('mouseup',()=>{pan=null;});
 cv.addEventListener('mousemove',e=>{
- if(!V.length)return;
- const{x,y}=pos(e);
- if(arr){
-  const q=pegar(iX(x),pY(y));
-  const t=L[arr.k];
-  if((arr.w==='a'&&q.i<t.b.i)||(arr.w==='b'&&q.i>t.a.i)){ t[arr.w]=q; remedir(t); refresh(); }
-  $('lec').innerHTML=`${q.f} · <b>${q.q}</b> ${q.p.toFixed(2)}`;
-  dib(); return;
- }
+ if(!V.length||!pan)return;
+ const{x}=pos(e);
  if(pan){
   const d=Math.round((pan.x-x)/M.w*(pan.i1-pan.i0));
   let a=pan.i0+d,b=pan.i1+d;
   if(a<0){b-=a;a=0;} if(b>V.length-1){a-=b-(V.length-1);b=V.length-1;}
   vis={i0:Math.max(0,a),i1:b}; dib(); return;
  }
- if(traz){ hov=pegar(iX(x),pY(y));
-  $('lec').innerHTML=`${hov.f} · <b>${hov.q}</b> ${hov.p.toFixed(2)}`; dib(); }
- else cv.style.cursor=agarrar(x,y)?'grab':'default';
 });
 cv.addEventListener('wheel',e=>{
  if(!V.length)return; e.preventDefault();
@@ -456,119 +452,8 @@ cv.addEventListener('wheel',e=>{
  vis={i0:Math.max(0,a),i1:b}; dib();
 },{passive:false});
 
-cv.addEventListener('click',e=>{
- if(!V.length||!traz)return;
- const{x,y}=pos(e), q=pegar(iX(x),pY(y));
- if(!pend){pend=q;$('lec').innerHTML='Primer punto. Marcá el segundo.';}
- else{
-  if(q.i===pend.i){$('lec').innerHTML='Misma vela, elegí otra.';return;}
-  const a=pend.i<q.i?pend:q, b=pend.i<q.i?q:pend;
-  L.push(Object.assign({a,b,tipo:$('tipo').value},medir(a,b,$('rol').value)));
-  pend=null;sel=L.length-1;refresh();$('lec').innerHTML='Línea medida. Arrastrá los extremos para ajustar.';
- }
- dib();
-});
-
-$('modo').onclick=()=>{traz=!traz;$('modo').classList.toggle('on',traz);
- $('modo').textContent=traz?'Trazando · clic para parar':'Trazar';
- cv.style.cursor=traz?'crosshair':'default';
- if(!traz){pend=null;hov=null;} dib();};
-$('undo').onclick=()=>{L.pop();sel=-1;pend=null;refresh();dib();};
 $('todo').onclick=()=>{if(V.length){vis={i0:0,i1:V.length-1};dib();}};
 $('recientes').onclick=()=>{if(V.length){vis={i0:Math.max(0,V.length-200),i1:V.length-1};dib();}};
-
-/* ───── importar lineas del indicador ───── */
-$('ejemplo').onclick=()=>{
- if(!V.length){$('lec').innerHTML='Cargá primero el CSV.';return;}
- const u=V.length-1, i=Math.max(0,u-120);
- $('imp').value=`mayor ${V[i].f} ${V[i].h.toFixed(2)} ${V[u].f} ${V[u].c.toFixed(2)}\n`
-   +`menor ${V[Math.max(0,u-60)].f} ${V[Math.max(0,u-60)].l.toFixed(2)} ${V[u].c.toFixed(2)}`;
- $('lec').innerHTML='Ejemplo puesto. Dale a "Cargar y editar".';
-};
-$('importar').onclick=()=>{
- if(!V.length){$('lec').innerHTML='Cargá primero el CSV.';return;}
- const u=V.length-1;
- const idx={}; V.forEach((v,i)=>idx[v.f]=i);
- const cerca=f=>{ if(idx[f]!==undefined)return idx[f];
-  let mj=0,d=1e18; const t=Date.parse(f);
-  V.forEach((v,i)=>{const dd=Math.abs(Date.parse(v.f)-t);if(dd<d){d=dd;mj=i;}});
-  return mj; };
-
- const filas=$('imp').value.split(/\r?\n/);
- const nuevas=[]; let act=null;
- filas.forEach(raw=>{
-  const ln=raw.trim();
-  if(!ln) return;
-  if(/[{}();=]|plot\(|input\.|line\.new|display\./.test(ln)) return;
-  const fech=(ln.match(/\d{4}-\d{2}-\d{2}/g)||[]);
-  const nums=(ln.replace(/\d{4}-\d{2}-\d{2}/g,' ').match(/-?\d+\.\d+/g)||[]).map(Number);
-  const esMenor=/menor/i.test(ln);
-  if(fech.length){
-   if(act) nuevas.push(act);
-   act={fechas:fech, nums:nums.slice(), tipo:esMenor?'menor':'mayor'};
-   if(fech.length>=2 && nums.length>=2){ nuevas.push(act); act=null; }
-  } else if(act && nums.length){
-   act.nums=act.nums.concat(nums);
-  }
- });
- if(act) nuevas.push(act);
-
- let n=0, malas=0;
- nuevas.forEach(o=>{
-  let ia,ib,pa,pb;
-  if(o.fechas.length>=2 && o.nums.length>=2){
-   ia=cerca(o.fechas[0]); ib=cerca(o.fechas[1]); pa=o.nums[0]; pb=o.nums[1];
-  } else if(o.fechas.length===1 && o.nums.length>=2){
-   ia=cerca(o.fechas[0]); ib=u; pa=o.nums[0]; pb=o.nums[1];
-  } else if(o.fechas.length===1 && o.nums.length===1){
-   ia=cerca(o.fechas[0]); ib=u; pa=o.nums[0]; pb=o.nums[0];
-  } else { malas++; return; }
-  if(ia>=ib||!isFinite(pa)||!isFinite(pb)){malas++;return;}
-  const a={i:ia,p:pa,q:'del panel',f:V[ia].f}, b={i:ib,p:pb,q:'del panel',f:V[ib].f};
-  L.push(Object.assign({a,b,tipo:o.tipo,delIndicador:true},medir(a,b,'auto'))); n++;
- });
- sel=L.length-1;refresh();dib();
- $('lec').innerHTML = n
-  ? `Cargué <b>${n}</b> línea(s) del indicador. Arrastrá los extremos para corregirlas.`
-  : (malas ? `Encontré ${malas} bloque(s) pero sin fecha + precio suficientes.`
-           : 'No encontré ninguna fecha con su precio. Pegá las filas del panel, no el código.');
-};
-
-/* ----- linea calculada por cuantiles ----- */
-let calc=null;
-function sync(){ $('vq').textContent=$('sq').value+' %'; $('vv').textContent=$('sv').value;
-  const d=+$('sd').value; $('vd').textContent = d===0?'inicio':(d+' %'); }
-['sq','sv','sd'].forEach(id=>$(id).addEventListener('input',function(){sync();if(calc)calcular();}));
-sync();
-
-function calcular(){
- if(!V.length){$('lcalc').textContent='Cargá el CSV primero.';return;}
- const u=V.length-1, vent=+$('sv').value;
- const base=Math.max(0,u-vent+1);
- const i0=Math.min(u-25, base+Math.round((+$('sd').value)/100*vent));
- const q=(+$('sq').value)/100, sop=$('crol').value==='soporte';
- const n=u-i0+1, esc=V[u].c;
- const z=[]; for(let k=i0;k<=u;k++) z.push(sop?V[k].zi:V[k].zs);
- let mej=null;
- for(let pm=-0.35;pm<=0.351;pm+=0.0025){
-  const m=pm/100*esc;
-  const r=z.map(function(v,k){return v-m*k;}).sort(function(a,b){return a-b;});
-  const c0=r[Math.max(0,Math.min(r.length-1,Math.round(q*(r.length-1))))];
-  let err=0;
-  for(let k=0;k<n;k++){ const d=z[k]-(c0+m*k);
-    err += sop ? Math.max(0,-d)*3+Math.max(0,d) : Math.max(0,d)*3+Math.max(0,-d); }
-  if(!mej||err<mej.err) mej={err:err,m:m,c0:c0};
- }
- const a={i:i0,p:mej.c0,q:'calculado',f:V[i0].f};
- const b={i:u,p:mej.c0+mej.m*(u-i0),q:'calculado',f:V[u].f};
- calc=Object.assign({a:a,b:b,tipo:'calc'},medir(a,b,$('crol').value));
- $('lcalc').innerHTML='ancla '+a.f+' <b>'+a.p.toFixed(2)+'</b> · pend '+(mej.m>=0?'+':'')+mej.m.toFixed(4)
-   +' · '+calc.cont.length+' contactos · '+calc.viol+' violaciones · hoy '+calc.hoy.toFixed(2);
- dib();
-}
-$('calc').onclick=calcular;
-$('crol').onchange=function(){if(calc)calcular();};
-$('limpiarCalc').onclick=function(){calc=null;$('lcalc').textContent='';dib();};
 
 /* ───── lista ───── */
 function refresh(){
@@ -577,28 +462,27 @@ function refresh(){
   $('exp').disabled=true;$('salida').style.display='none';return;}
  c.innerHTML=L.map((t,k)=>{
   const col=t.tipo==='mayor'?'var(--morada)':'var(--azul)';
+  const origen=t.motorOriginal?' · motor original':'';
   return `<div class="est ${k===sel?'sel':''}" data-k="${k}" style="border-left-color:${col}">
-   <span class="x" data-del="${k}">✕</span>
-   <b style="color:${col}">${t.tipo==='mayor'?'Mayor':'Menor'} ${k+1}</b>${t.delIndicador?' <span style="color:var(--gris);font-weight:400">· del indicador</span>':''}
+   <b style="color:${col}">${t.tipo==='mayor'?'Mayor':'Menor'} ${k+1}</b><span style="color:var(--gris);font-weight:400">${origen}</span>
    <div style="color:var(--tenue);margin-top:2px">${t.a.f} · ${t.a.q} ${t.a.p.toFixed(2)}</div>
    <div class="med">
-    <span>rol</span><span>${t.rol}</span>
-    <span>contactos</span><span>${t.cont.length}</span>
-    <span>violaciones</span><span>${t.viol} · peor ${t.peor.toFixed(1)}%</span>
-    <span>cuantil</span><span>${t.q.toFixed(1)} %</span>
-    <span>pendiente</span><span>${t.m>=0?'+':''}${t.m.toFixed(4)}</span>
-    <span>largo · hoy</span><span>${t.n} · ${t.hoy.toFixed(2)}</span>
-   </div></div>`;}).join('');
- c.querySelectorAll('.est').forEach(d=>d.onclick=e=>{
-  if(e.target.dataset.del!==undefined){L.splice(+e.target.dataset.del,1);sel=-1;}
-  else sel=+d.dataset.k;
+     <span>rol</span><span>${t.rol}</span>
+     <span>contactos</span><span>${t.cont.length}</span>
+     <span>violaciones</span><span>${t.viol} · peor ${t.peor.toFixed(1)}%</span>
+     <span>cuantil</span><span>${t.q.toFixed(1)} %</span>
+     <span>pendiente</span><span>${t.m>=0?'+':''}${t.m.toFixed(4)}</span>
+     <span>largo · hoy</span><span>${t.n} · ${t.hoy.toFixed(2)}</span>
+    </div></div>`;}).join('');
+ c.querySelectorAll('.est').forEach(d=>d.onclick=()=>{
+  sel=+d.dataset.k;
   refresh();dib();});
  $('exp').disabled=false;
 }
 
 $('exp').onclick=()=>{
  const u=V.length-1;
- let s=`ESTRUCTURAS TRAZADAS A MANO\nvelas ${V.length} · ${V[0].f} a ${V[u].f} · cierre ${V[u].c}\n`;
+ let s=`LÍNEAS DEL MOTOR ORIGINAL\nvelas ${V.length} · ${V[0].f} a ${V[u].f} · cierre ${V[u].c}\n`;
  s+=`zona cuerpo-mecha peso ${PESO} · tolerancia contacto ${(TOL*100).toFixed(1)}%\n\n`;
  L.forEach((t,k)=>{
   s+=`${t.tipo.toUpperCase()} ${k+1}  (${t.rol})\n`;
@@ -613,6 +497,7 @@ $('exp').onclick=()=>{
  const o=$('salida');o.value=s;o.style.display='block';o.select();
 };
 addEventListener('resize',()=>{if(V.length)dib();});
+restaurarSesion();
 </script>
 </body>
 </html>
